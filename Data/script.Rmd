@@ -127,56 +127,7 @@ kable(wide[1:10, 1:10], caption = 'Data Preview') %>%
 ```
 
 
-# 1 Sequential cross validation
-## 1.1 Time series
-
-```{r ts.data} 
-ts = wide[,1, drop = FALSE]
-```
-
-### Cross-validation
-
-Use the first *80%* of the data as the training set, while the rest 20% as the test set. 
-
-```{r ts.cv, include = FALSE}
-ts_train_df = ts[1:(0.8*nrow(ts)), , drop=FALSE]
-ts_test_df = ts[(0.8*nrow(ts)+1): nrow(ts), , drop=FALSE]
-cutoff = tail(ts_train_df, n=1)
-```
-
-The range of training data is from `r toString(rownames(ts_train_df)[1])` to `r toString(rownames(cutoff))`. 
-
-```{r tsplot}
-ts_data = ts(ts, frequency = 7, start = c(1,1))
-ts_train = ts_data[1:(0.8*(length(ts_data)))]
-ts_test = ts_data[(0.8*length(ts_data)+1): length(ts_data)]
-decomp = decompose(ts_data, type = 'mult')
-plot(decomp)
-```
-
-```{r ts.model}
-arima.model = auto.arima(ts_train)
-ar_pre = forecast(arima.model, h = length(ts_test))
-summary(arima.model)
-plot(ar_pre)
-```
-
-```{r ts.error, echo=FALSE}
-#Calculating error
-ts_pre = cbind(ts_test_df, data.frame(ar_pre)[1]) %>%
-  rename(., TrueValue = True, Forecast = Point.Forecast) %>%
-  mutate(TrueValue = as.numeric(TrueValue))
-
-seq.ts.err = errors(ts_pre,TrueValue, Forecast)
-rownames(seq.ts.err) = rownames(ts_test_df)
-seq.ts.err[1:20, ]%>%
-  kable(., 'latex', caption = 'Time series Errors', 
-        longtable = T, booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
-```
-
-
-## 1.2 Advanced Booking Models
+## 1.1 Pickup Models
 
 ```{r cv.setup} 
 #Cross-Validation
@@ -185,7 +136,7 @@ train = wide[train_ind,]
 test = wide[-train_ind,]
 ```
 
-### 1.2.1 Additive Advance Booking Models
+### 1.1.1 Additive Pickup Models
 
 ```{r apk} 
 #calculating pickup
