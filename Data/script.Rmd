@@ -177,60 +177,8 @@ ggplot(subset(justplot.apk, variable %in% c("True" , "pred")) ,
   xlab('Date') + ylab('Arrivals')
 ```
 
-### 1.2.2 Additive Advance booking (with weekly differentiation)
-For additive model, it's also possible to add on pickups by weekday.
 
-```{r apk.dow, echo=TRUE}
-apk.wd = train
-for (j in ncol(apk.wd):3){
-  apk.wd[,j] = apk.wd[,1] - apk.wd[,j]
-}
-
-#now apk.wd is the pickup
-apk.wd = apk.wd %>%
-  group_by(DOW) %>%
-  summarise_at(.vars=names(.)[3:ncol(apk.wd)], .funs='mean')
-
-justplot.apkwd = melt(apk.wd, id='DOW')
-ggplot(justplot.apkwd, 
-       aes(x=variable, y=value, group=DOW, color = DOW)) +
-  geom_line() +
-  scale_color_brewer(palette="Accent")+
-  ggtitle('Additive Pickups (by weekday)') +
-  xlab('DBA') + ylab('pickups')
-```
-
-```{r apk.wd.pred, echo=FALSE}
-apk.wd.pre = test
-apk.wd.pre[, 3:ncol(apk.wd.pre)] = NA
-
-for (i in 1:(nrow(apk.wd.pre))){
-  m = match(apk.wd.pre[i,2], apk.wd$DOW)
-  apk.wd.pre[i,i+2] = test[i,i+2] + apk.wd[m,i+2]
-}
-apk.wd.pre[1:10, 1:10]%>%
-  kable(., 'latex', caption = 'Additive Pickup Predictions', 
-        longtable = T, booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
-
-apk.wd.pre[, "pred"] = apply(apk.wd.pre[, 3:(ncol(apk.wd.pre)-1)], 
-                             1, max, na.rm = TRUE) 
-apk.wd.pre = apk.wd.pre %>% select(True, pred)
-```
-
-```{r apk.wd.err, echo=FALSE}
-seq.apk.wd.err = errors(apk.wd.pre, True, pred)
-rownames(seq.apk.wd.err) = rownames(test)
-justplot.apkwd = melt(setDT(seq.apk.wd.err, keep.rownames = TRUE), 'rn')
-
-ggplot(subset(justplot.apkwd, variable %in% c("True" , "pred")) , 
-       aes(x=rn, y=value, group=variable, color = variable)) +
-  geom_line() +
-  ggtitle('Forecast and True Value for Additive Pickup Model (by weekday)') +
-  xlab('Date') + ylab('Arrivals')
-```
-
-### 1.2.3 Multiplicative Models
+### 1.1.2 Multiplicative Pickup Models
 
 ```{r mpk} 
 seq.mpk.avg = colMeans(train[,-2]) %>% data.frame() %>% t()
@@ -269,60 +217,11 @@ ggplot(subset(justplot.mpk, variable %in% c("True" , "pred")) ,
   xlab('Date') + ylab('Arrivals')
 ```
 
-### 1.2.4 Multiplicative Advance booking (with weekly differentiation)
-```{r ran.mpk.wd.dow} 
-mpk.wd = train
-for (j in ncol(mpk.wd):3){
-  mpk.wd[,j] =  mpk.wd[,j]/mpk.wd[,1]
-}
-mpk.wd = mpk.wd %>%
-  group_by(DOW) %>%
-  summarise_at(.vars=names(.)[3:(ncol(apk.wd)-1)], .funs='mean')
-
-justplot.mpkwd = melt(mpk.wd, id='DOW')
-ggplot(justplot.mpkwd, 
-       aes(x=variable, y=value, group=DOW, color = DOW)) +
-  geom_line() +
-  scale_color_brewer(palette="Accent")+
-  ggtitle('Multi Pickup Ratios (by weekday)') +
-  xlab('DBA') + ylab('pickups')
-```
-
-```{r mpk.wd.pred} 
-mpk.wd.pre = test
-mpk.wd.pre[, 3:ncol(mpk.wd.pre)] = NA
-
-for (i in 1:(nrow(mpk.wd.pre))){
-  m = match(mpk.wd.pre[i,2], mpk.wd$DOW)
-  mpk.wd.pre[i,i+2] = test[i,i+2]/mpk.wd[m,i+1]
-}
-mpk.wd.pre[1:10, 1:10]%>%
-  kable(., 'latex', caption = 'Multi Pickup Predictions (by weekday)', 
-        longtable = T, booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
-
-mpk.wd.pre[, "pred"] = apply(mpk.wd.pre[, 3:(ncol(mpk.wd.pre)-1)], 
-                             1, max, na.rm = TRUE) 
-mpk.wd.pre = mpk.wd.pre %>% select(True, pred)
-```
-
-```{r mpk.wd.err}
-seq.mpk.wd.err = errors(mpk.wd.pre, True, pred)
-rownames(seq.mpk.wd.err) = rownames(test)
-justplot.mpkwd = melt(setDT(seq.mpk.wd.err, keep.rownames = TRUE), 'rn')
-
-ggplot(subset(justplot.mpkwd, variable %in% c("True" , "pred")) , 
-       aes(x=rn, y=value, group=variable, color = variable)) +
-  geom_line() +
-  ggtitle('Forecast and True Value for Multi Pickup Model (by weekday)') +
-  xlab('Date') + ylab('Arrivals')
-```
 
 ```{r err.conclude, include = FALSE}
-pp = cbind((seq.apk.err[,3]), seq.apk.wd.err[,3], 
-      seq.mpk.err[,3], seq.mpk.wd.err[,3]) %>%
+pp = cbind((seq.apk.err[,3]), seq.mpk.err[,3]) %>%
   data.frame() 
-colnames(pp) = c('apk','apk.wd','mpk', 'mpk.wd')
+colnames(pp) = c('apk','mpk')
 pp$Date = rownames(test)
 pp$True = test$True
 pp = melt(pp, id='Date')
