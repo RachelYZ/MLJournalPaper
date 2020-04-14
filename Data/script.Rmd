@@ -1,0 +1,1257 @@
+---
+title: "Seq+Random Holdout - Models"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+fontsize: 12pt
+header-includes: 
+- \usepackage{longtable}
+classoption: landscape, a4paper
+---
+
+## Setup
+```{r setup, include=FALSE}
+options(digits = 3)
+library(knitr)
+library(haven)
+library(kknn)
+library(dplyr)
+library(magrittr)
+library(kableExtra)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(rpart)
+library(rpart.plot)
+library(party)
+library(car)
+library(randomForest)
+library(stargazer)
+library(lme4)
+library(lmerTest)
+library(lme4)
+library(caret)
+library(GGally)
+library(reshape2)
+library(grid)
+library(gridExtra)
+library(dummies)
+library(corrplot)
+library(magrittr)
+library(DT)
+library(xtable)
+library(kableExtra)
+library(jtools)
+library(reshape2)
+library(boot)
+library(pastecs)
+library(fpp)
+library(forecast)
+library(data.table)
+library(ISLR)
+library(e1071)
+library(FNN) 
+library(neuralnet)
+library(nnet)
+library(purrr)
+knitr::opts_chunk$set(error=TRUE,fig.width=5, fig.height=5)
+```
+
+```{r errfunc, include=FALSE}
+#Function to calculate errors 
+errors = function(data, true, pred) {
+  require(dplyr)
+  true <- enquo(true)
+  pred <- enquo(pred)
+  data = data %>%
+    mutate(., Error = !! pred - !! true) %>%
+    mutate(., Abs_Err = abs(!! pred - !! true)) %>%
+#    mutate(., Percent_Err = (!! pred - !! true)/(!! true)) %>%
+#    mutate(., SE = (!! pred - !! true)^2) %>%
+    mutate(., APE = abs((!! pred - !! true)/(!! true)))
+ return (data)
+}
+```
+
+```{r dataset, include=FALSE}
+arr <- read.csv("~/Documents/Research/Thesis writing/NewData/Arr.csv") %>%
+  data.frame()%>%
+  select(Arrival.Date, Booking.Window, Quantity) %>%
+  mutate_at(., vars(Arrival.Date),  funs(as.Date(., "%m/%d/%Y")))
+```
+
+```{r, echo=FALSE}
+dt = arr %>%
+  group_by(Arrival.Date, Booking.Window) %>%
+  mutate(Quan = sum(Quantity)) %>%
+  dplyr::arrange(., Arrival.Date, Booking.Window) 
+
+dt = dt[-(1:2),-3] #throw out the first two observations to avoid inconsistency
+
+foo = function(x){
+  require(dplyr)
+  new = as.Date(x, '%y.%m.%d') %>%
+     format(., '20%y-%m-%d') %>%
+    as.Date()
+  return (new)
+}
+
+dt$Arrival.Date = foo(dt$Arrival.Date)
+```
+
+The independent variables used in this sections are: 
+1) ROH on each DBA; 
+2) Day of week of the arrival day;
+
+```{r wide, message=FALSE, echo = FALSE}
+#accumulated ROH_DBA
+wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>% 
+  data.frame() %>%
+  arrange(., Arrival.Date)
+
+for (i in (ncol(wide)-1):2){
+  wide[i] = wide[i] + wide[i+1] 
+}
+wide[,3] = as.factor(weekdays(wide$Arrival.Date))
+colnames(wide) = c('Arrival.Date', 'True', 'DOW', paste0('ROH_D', 1:(ncol(wide)-3)))
+
+wide$DOW <- ordered(wide$DOW, levels=c("Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+wide = wide %>%
+  remove_rownames %>% column_to_rownames('Arrival.Date')
+
+kable(wide[1:10, 1:10], caption = 'Data Preview') %>%
+  kable_styling(latex_options = c("striped", "hold_position")) 
+```
+
+
+# 1 Sequential cross validation
+## 1.1 Time series
+
+```{r ts.data} 
+ts = wide[,1, drop = FALSE]
+```
+
+### Cross-validation
+
+Use the first *80%* of the data as the training set, while the rest 20% as the test set. 
+
+```{r ts.cv, include = FALSE}
+ts_train_df = ts[1:(0.8*nrow(ts)), , drop=FALSE]
+ts_test_df = ts[(0.8*nrow(ts)+1): nrow(ts), , drop=FALSE]
+cutoff = tail(ts_train_df, n=1)
+```
+
+The range of training data is from `r toString(rownames(ts_train_df)[1])` to `r toString(rownames(cutoff))`. 
+
+```{r tsplot}
+ts_data = ts(ts, frequency = 7, start = c(1,1))
+ts_train = ts_data[1:(0.8*(length(ts_data)))]
+ts_test = ts_data[(0.8*length(ts_data)+1): length(ts_data)]
+decomp = decompose(ts_data, type = 'mult')
+plot(decomp)
+```
+
+```{r ts.model}
+arima.model = auto.arima(ts_train)
+ar_pre = forecast(arima.model, h = length(ts_test))
+summary(arima.model)
+plot(ar_pre)
+```
+
+```{r ts.error, echo=FALSE}
+#Calculating error
+ts_pre = cbind(ts_test_df, data.frame(ar_pre)[1]) %>%
+  rename(., TrueValue = True, Forecast = Point.Forecast) %>%
+  mutate(TrueValue = as.numeric(TrueValue))
+
+seq.ts.err = errors(ts_pre,TrueValue, Forecast)
+rownames(seq.ts.err) = rownames(ts_test_df)
+seq.ts.err[1:20, ]%>%
+  kable(., 'latex', caption = 'Time series Errors', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+
+## 1.2 Advanced Booking Models
+
+```{r cv.setup} 
+#Cross-Validation
+train_ind = 1:(0.8*nrow(wide)) 
+train = wide[train_ind,]
+test = wide[-train_ind,]
+```
+
+### 1.2.1 Additive Advance Booking Models
+
+```{r apk} 
+#calculating pickup
+ct = train[, -2, drop=FALSE]
+for (i in ncol(ct):1){
+  ct[,i] = ct[,1]-ct[,i]
+}
+seq.apk.avg = data.frame(colMeans(ct))
+plot(seq.apk.avg[,1], cex=.5,
+     main = 'Additive Pickup', xlab = "Days before arrival", ylab='average pickup')
+```
+
+```{r apk.pre}
+seq.apk.pre = test 
+seq.apk.pre[,3:ncol(seq.apk.pre)] = NA
+
+for (i in 1:(nrow(seq.apk.pre))){
+  seq.apk.pre[i,i+2] = t(seq.apk.avg)[1,i+1, drop=FALSE] + test[i,i+2, drop=FALSE]
+}
+
+seq.apk.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Additive Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+seq.apk.pre[, "pred"] = apply(seq.apk.pre[, 3:ncol(seq.apk.pre)], 1, max, na.rm = TRUE) 
+seq.apk.pre = seq.apk.pre %>% select(True, pred)
+```
+
+```{r apk.err, echo=TRUE, message=FALSE}
+seq.apk.err = errors(seq.apk.pre, True, pred)
+rownames(seq.apk.err) = rownames(test)
+justplot.apk = melt(setDT(seq.apk.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.apk, variable %in% c("True" , "pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Additive Pickup Model') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+### 1.2.2 Additive Advance booking (with weekly differentiation)
+For additive model, it's also possible to add on pickups by weekday.
+
+```{r apk.dow, echo=TRUE}
+apk.wd = train
+for (j in ncol(apk.wd):3){
+  apk.wd[,j] = apk.wd[,1] - apk.wd[,j]
+}
+
+#now apk.wd is the pickup
+apk.wd = apk.wd %>%
+  group_by(DOW) %>%
+  summarise_at(.vars=names(.)[3:ncol(apk.wd)], .funs='mean')
+
+justplot.apkwd = melt(apk.wd, id='DOW')
+ggplot(justplot.apkwd, 
+       aes(x=variable, y=value, group=DOW, color = DOW)) +
+  geom_line() +
+  scale_color_brewer(palette="Accent")+
+  ggtitle('Additive Pickups (by weekday)') +
+  xlab('DBA') + ylab('pickups')
+```
+
+```{r apk.wd.pred, echo=FALSE}
+apk.wd.pre = test
+apk.wd.pre[, 3:ncol(apk.wd.pre)] = NA
+
+for (i in 1:(nrow(apk.wd.pre))){
+  m = match(apk.wd.pre[i,2], apk.wd$DOW)
+  apk.wd.pre[i,i+2] = test[i,i+2] + apk.wd[m,i+2]
+}
+apk.wd.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Additive Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+
+apk.wd.pre[, "pred"] = apply(apk.wd.pre[, 3:(ncol(apk.wd.pre)-1)], 
+                             1, max, na.rm = TRUE) 
+apk.wd.pre = apk.wd.pre %>% select(True, pred)
+```
+
+```{r apk.wd.err, echo=FALSE}
+seq.apk.wd.err = errors(apk.wd.pre, True, pred)
+rownames(seq.apk.wd.err) = rownames(test)
+justplot.apkwd = melt(setDT(seq.apk.wd.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.apkwd, variable %in% c("True" , "pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Additive Pickup Model (by weekday)') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+### 1.2.3 Multiplicative Models
+
+```{r mpk} 
+seq.mpk.avg = colMeans(train[,-2]) %>% data.frame() %>% t()
+for (i in ncol(seq.mpk.avg):1){
+  seq.mpk.avg[1,i] = seq.mpk.avg[1,i] / seq.mpk.avg[1,1] 
+}
+
+plot(t(seq.mpk.avg), cex=.5,
+     main = 'Multiplicative Pickup Ratio', xlab = "Days before arrival", ylab='average pickup')
+```
+
+```{r mpk.pre}
+seq.mpk.pre = test 
+seq.mpk.pre[,3:ncol(seq.mpk.pre)] = NA
+for (i in 1:(nrow(seq.mpk.pre))){
+  seq.mpk.pre[i,i+2] = test[i,i+2]/seq.mpk.avg[1,i+1]
+}
+seq.mpk.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Multi Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+
+seq.mpk.pre[, "pred"] = apply(seq.mpk.pre[, 3:ncol(seq.mpk.pre)], 1, max, na.rm = TRUE) 
+seq.mpk.pre = seq.mpk.pre %>% select(True, pred)
+``` 
+
+```{r mpk.err, echo=FALSE} 
+seq.mpk.err = errors(seq.mpk.pre, True, pred)
+rownames(seq.mpk.err) = rownames(test)
+justplot.mpk = melt(setDT(seq.mpk.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.mpk, variable %in% c("True" , "pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Multi Pickup Model') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+### 1.2.4 Multiplicative Advance booking (with weekly differentiation)
+```{r ran.mpk.wd.dow} 
+mpk.wd = train
+for (j in ncol(mpk.wd):3){
+  mpk.wd[,j] =  mpk.wd[,j]/mpk.wd[,1]
+}
+mpk.wd = mpk.wd %>%
+  group_by(DOW) %>%
+  summarise_at(.vars=names(.)[3:(ncol(apk.wd)-1)], .funs='mean')
+
+justplot.mpkwd = melt(mpk.wd, id='DOW')
+ggplot(justplot.mpkwd, 
+       aes(x=variable, y=value, group=DOW, color = DOW)) +
+  geom_line() +
+  scale_color_brewer(palette="Accent")+
+  ggtitle('Multi Pickup Ratios (by weekday)') +
+  xlab('DBA') + ylab('pickups')
+```
+
+```{r mpk.wd.pred} 
+mpk.wd.pre = test
+mpk.wd.pre[, 3:ncol(mpk.wd.pre)] = NA
+
+for (i in 1:(nrow(mpk.wd.pre))){
+  m = match(mpk.wd.pre[i,2], mpk.wd$DOW)
+  mpk.wd.pre[i,i+2] = test[i,i+2]/mpk.wd[m,i+1]
+}
+mpk.wd.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Multi Pickup Predictions (by weekday)', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+
+mpk.wd.pre[, "pred"] = apply(mpk.wd.pre[, 3:(ncol(mpk.wd.pre)-1)], 
+                             1, max, na.rm = TRUE) 
+mpk.wd.pre = mpk.wd.pre %>% select(True, pred)
+```
+
+```{r mpk.wd.err}
+seq.mpk.wd.err = errors(mpk.wd.pre, True, pred)
+rownames(seq.mpk.wd.err) = rownames(test)
+justplot.mpkwd = melt(setDT(seq.mpk.wd.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.mpkwd, variable %in% c("True" , "pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Multi Pickup Model (by weekday)') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+```{r err.conclude, include = FALSE}
+pp = cbind((seq.apk.err[,3]), seq.apk.wd.err[,3], 
+      seq.mpk.err[,3], seq.mpk.wd.err[,3]) %>%
+  data.frame() 
+colnames(pp) = c('apk','apk.wd','mpk', 'mpk.wd')
+pp$Date = rownames(test)
+pp$True = test$True
+pp = melt(pp, id='Date')
+#ggplot(pp, aes(x=Date, y=value, group=variable, color = variable)) +
+#  geom_line() +
+#  ggtitle('Forecast and True Value for Multi Pickup Model (by weekday)') +
+#  xlab('Date') + ylab('Arrivals')
+```
+
+
+## 1.3 Regression
+
+Just use the nearest ROH_DBA in each model. For instance, to predict the arrival of the fifth observation (date), we construct the model as $Y = \beta_0 + \beta_{ROH DBA5} + \epsilon_i$. 
+
+```{r reg.pre, warning=FALSE, cache=TRUE}
+nrt = nrow(test) 
+nct = ncol(test)
+reg.pred = test[,1, drop=FALSE] %>%
+  cbind(., rep(0, nrow(test))) 
+colnames(reg.pred) = c('True', 'reg.pred')
+
+for (i in 1:(nrow(test))){
+  this.predictor = paste0('ROH_D',i)
+  lm.formula = paste('True', this.predictor, sep = '~')
+  reg = lm(lm.formula, data = train)
+  predict(reg, data = test)
+  this.test = test[i,]
+  reg.pred[i,2] = predict(reg, this.test)
+}
+```
+
+```{r reg.pre.wd, warning=FALSE, cache=TRUE}
+reg.pred2 = test[,1, drop=FALSE] %>%
+  cbind(., rep(0, nrow(test))) 
+colnames(reg.pred2) = c('True', 'reg.pred.wd')
+
+for (i in 1:(nrow(test))){
+  this.predictor = paste0('DOW+','ROH_D',i)
+  lm.formula = paste('True', this.predictor, sep = '~')
+  reg = lm(lm.formula, data = train)
+  #print(summary(reg)$coefficients)
+  this.test = test[i,]
+  reg.pred2[i,2] = predict(reg, this.test)
+}
+```
+
+```{r reg.err}
+seq.reg.err = errors(reg.pred, True, reg.pred)
+rownames(seq.reg.err) = rownames(test)
+justplot.reg = melt(setDT(seq.reg.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.reg, variable %in% c("True" , "reg.pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Regression Model') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+```{r reg.wd.err, echo=FALSE, message=FALSE}
+seq.reg.wd.err = errors(reg.pred2, True, reg.pred.wd)
+rownames(seq.reg.wd.err) = rownames(test)
+justplot.reg.wd = melt(setDT(seq.reg.wd.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.reg.wd, variable %in% c("True" , "reg.pred.wd")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Regression Model') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+## 1.4 KNN
+
+```{r knn.preProcess, messages=FALSE, warning=FALSE} 
+#Convert categorical variable into dummy variables
+train.true = train[,1] 
+dow.tr = dummy(train$DOW, sep='.')
+dow.te = dummy(test$DOW, sep='.')
+k.train = cbind(train[, -c(2, nearZeroVar(train))], dow.tr)
+k.test = cbind(test, dow.te)[,-2]
+```
+
+### K-NN Model 1
+
+* Repeated cross-validation with 10 folds, repeating 3 times
+* Each time randomly test 8 k-value, then choose the optimal 
+* applied PCA with a threshold of 80%
+
+```{r knn.pre, cache=TRUE, messages=FALSE, eval=FALSE} 
+#this cannot run, have to skip
+#Error in eval(predvars, data, env) : 
+#  object 'X.Users.Rachelcookies.Documents.Research.Thesis.writing.Code.new_data.new_seq_0616_ranstart.Rmd.Sunday' not found
+# Calls: <Anonymous> ... predict.train -> model.frame -> model.frame.default -> eval -> eval
+seq.knn.pre1 = rep(0, nrow(test))
+opk1 = rep(0, nrow(test))
+s1 = Sys.time()
+for (i in 1:nrow(test)){
+  this.train = k.train[, c((i+1):ncol(k.train))]
+  this.test = k.test[i, c((i+1):ncol(k.test))]
+  train.control = trainControl(method='repeatedcv', number=10, repeats = 3, preProcOptions = list(thresh=0.8))
+  
+  k = train(train.true~., method='knn', tuneLength = 8, 
+#         tuneGrid = expand.grid(k = 5:15),
+            trControl=train.control, preProcess=c('scale','center','pca'),
+            data=data.frame(train.true, this.train))
+  
+  s2 = Sys.time()
+  print(s2-s1)
+  opk1[i] = k$bestTune[[1]]
+  seq.knn.pre1[i] = predict(k, this.test)
+}
+seq.knn.pre1 = cbind(true = test[,1], k.pred1 = seq.knn.pre1) %>% data.frame() 
+seq.knn.err = errors(seq.knn.pre1, true, k.pred1)
+```
+
+### K-NN Model 2
+
+ * Weighted KNN: it uses kernel functions to weight the neighbors according to their distances. Each time we cross-validation find the optimal kernel. 
+ * Euclidean distance
+ 
+```{r knn.pre.trial2, cache=TRUE}
+seq.knn.pre2 = rep(0, nrow(test))
+opk2 = rep(0, nrow(test))
+
+for (i in 1:nrow(test)){
+  this.train = k.train[, c(1, (i+1):ncol(k.train))]
+  this.test = k.test[i, c(1, (i+1):ncol(k.test))]
+  k.para = train.kknn(True~., data.frame(True = train[,1], this.train), kmax=20, kernel = c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
+  kn = toString(k.para$best.parameters[[1]])
+  k = k.para$best.parameters[[2]]
+  kknn <- kknn(True~., k=k, scale = TRUE, distance=2, 
+               train = this.train,
+               test = this.test,
+               kernel = paste0(kn))
+  seq.knn.pre2[i]=predict(kknn, newdata=this.test)
+}
+
+seq.knn.kern.pre = cbind(true = test[,1], kknn.pred = seq.knn.pre2) %>%
+  data.frame() 
+seq.knn.err2 = errors(seq.knn.kern.pre, true, kknn.pred)
+#colMeans(seq.knn.err2[1:10,])
+```
+
+```{r plot.kknn}
+justplot.kknn = melt(setDT(seq.knn.err2, keep.rownames = TRUE), 'rn')
+ggplot(subset(justplot.kknn, variable %in% c("true" , "kknn.pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Kernel KNN Model') +
+  xlab('Date') + ylab('Arrivals')
+
+ggplot(aes(x=rn, y=value, group=variable, color = variable), 
+       data=subset(justplot.kknn, variable %in% c('Abs_Err'))) +
+  geom_line() +
+  ggtitle('Absolute Error for Kernel KNN') +
+  xlab('DBA') + ylab('Abs_Error')
+```
+
+## 1.5 Random Forest
+
+```{r random.forest, cache=TRUE} 
+seq.rtree.pred = test[, 1:2]
+colnames(seq.rtree.pred) = c('True', 'RTree.Pred')
+seq.rtree.pred$RTree.Pred = NA
+#s1 = Sys.time()
+for (i in 1:nrow(test)){
+  this.train = train[, c(1, (i+2):ncol(train))]   #no DOW in random forest model
+  this.test = test[i, c(1, (i+2):ncol(test))]
+  r.tree = randomForest(True~., data = this.train)
+#  print(Sys.time()-s1)
+  seq.rtree.pred[i,2] = predict(r.tree, this.test, type = 'response')
+}
+
+seq.rt.err = errors(seq.rtree.pred, True, RTree.Pred)
+#colMeans(seq.rt.err)
+```
+
+```{r rf.caret, cache=TRUE} 
+#20 most important variables by RF
+set.seed(996)
+seq.rtree.pred2 = test[, 1:2]
+colnames(seq.rtree.pred2) = c('True', 'RTree.Pred')
+seq.rtree.pred2$RTree.Pred = NA
+s1 = Sys.time()
+
+for (i in 1:nrow(test)){
+  this.train = train[, c(1, 2, (i+2):ncol(train))]
+  this.train = this.train[, -nearZeroVar(this.train)]  #eliminate zero variance variables
+  this.test = test[i, c(1, 2, (i+2):ncol(test))]
+  
+  #feature selection (top 20)
+  fs = randomForest(True~., data=this.train, importance=TRUE, ntree=100) %>%
+    importance() %>% data.frame() %>%
+    rownames_to_column() %>%
+    arrange(., desc(`X.IncMSE`))
+  imp.20 = fs[1:20,]$rowname
+  this.train = this.train[, c(1, which(colnames(this.train) %in% imp.20))]
+  
+  train.control=trainControl(method='repeatedcv', number=10, repeats = 3)
+  r.tree = train(True~., data = this.train, method='rf', 
+                 trControl=train.control, tuneLength = 10
+                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))
+                 )
+  print(Sys.time()-s1)
+  #print(r.tree)
+  seq.rtree.pred2[i,2] = predict(r.tree, this.test, type = 'raw')
+}
+
+seq.rtree.err = errors(seq.rtree.pred2, True, RTree.Pred)
+```
+
+```{r plot.rf, echo=FALSE} 
+justplot.rtree = melt(setDT(seq.rtree.err, keep.rownames = TRUE), 'rn')
+
+ggplot(subset(justplot.rtree, variable %in% c("True" , "RTree.Pred")) , 
+       aes(x=rn, y=value, group=variable, color = variable)) +
+  geom_line() +
+  ggtitle('Forecast and True Value for Random Forest Model') +
+  xlab('Date') + ylab('Arrivals')
+```
+
+```{r results, echo=FALSE, eval=FALSE} 
+results.st = rbind(colMeans(seq.apk.err[1:10, 4:6]),
+  colMeans(seq.mpk.err[1:10, 4:6]),
+  colMeans(seq.apk.wd.err[1:10, 4:6]),
+  colMeans(seq.mpk.wd.err[1:10, 4:6]),
+  colMeans(seq.reg.err[1:10, 4:6]),
+  colMeans(seq.knn.err[1:10, 4:6]),
+  colMeans(seq.knn.err2[1:10, 3:5]),
+  colMeans(seq.rtree.err[1:10, 3:5])) %>%
+  data.frame %>%
+  rename(., ME = 'Error', MAE = 'Abs_Err', MAPE = 'APE') %>%
+  `rownames<-`(c('APK', 'MPK', 'APK.week', 'MPK.week', 'Regression', 
+                    'Knn', 'Weighted KNN', 'RForest')) %>%
+  rownames_to_column() %>%
+  arrange(., MAE) 
+
+results.st %>%
+  kable(., 'latex', caption = 'Model Performance (Short-term: 1-10 days)', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+```{r results30, echo=FALSE, eval=FALSE}
+results.30 = rbind(colMeans(seq.apk.err[1:30, 4:6]),
+  colMeans(seq.mpk.err[1:30, 4:6]),
+  colMeans(seq.apk.wd.err[1:30, 4:6]),
+  colMeans(seq.mpk.wd.err[1:30, 4:6]),
+  colMeans(seq.reg.err[1:30, 4:6]),
+  colMeans(seq.knn.err[1:30, 4:6]),
+  colMeans(seq.knn.err2[1:30, 3:5]),
+  colMeans(seq.rtree.err[1:30, 3:5])) %>%
+  data.frame %>%
+  rename(., ME = 'Error', MAE = 'Abs_Err', MAPE = 'APE') %>%
+  `rownames<-`(c('APK', 'MPK', 'APK.week', 'MPK.week', 'Regression', 
+                    'Knn', 'W.KNN', 'RForest')) %>%
+  rownames_to_column() %>%
+  arrange(., MAE) 
+
+results.30 %>% 
+  kable(., 'latex', caption = 'Model Performance (Short-term: 1-14 days)', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+```{r all.results, echo=FALSE, eval=FALSE}
+results.all = rbind(colMeans(seq.apk.err[, 4:6]),
+  colMeans(seq.mpk.err[, 4:6]),
+  colMeans(seq.apk.wd.err[, 4:6]),
+  colMeans(seq.mpk.wd.err[, 4:6]),
+  colMeans(seq.reg.err[, 4:6]),
+  colMeans(seq.knn.err[, 4:6]),
+  colMeans(seq.knn.err2[, 3:5]),
+  colMeans(seq.rtree.err[, 3:5])) %>%
+  data.frame %>%
+  rename(., ME = 'Error', MAE = 'Abs_Err', MAPE = 'APE') %>%
+  `rownames<-`(c('APK', 'MPK', 'APK.week', 'MPK.week', 'Regression', 
+                    'Knn', 'W.Knn', 'RForest')) %>%
+  rownames_to_column() %>%
+  arrange(., MAE) 
+
+results.all %>% 
+  kable(., 'latex', caption = 'Model Performance (Short-term: 1-14 days)', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+------------------
+
+# 2 Random cross validation
+## 2.1 Advanced Booking Models
+```{r matrix.error.function, include = FALSE} 
+materr = function(data){
+  #requirements for data: 
+  #first column is true value, 
+  #the rest of the columns records the predictions of different parameters
+  require(dplyr)
+  #generating error containers
+  m = data 
+  for (j in 2:ncol(data)){
+    m[,j] = (data[,j] - data[,1])  #calculating errors for each forecast
+  }
+  me = colMeans(m)
+  mse = colMeans(m^2)
+  mae = colMeans(abs(m))
+  #print(abs(m))
+  #print(m)
+  
+  p = data
+  for (i in 2:ncol(p)){
+    p[, i] = m[,i] / data[,1]
+  }
+  #print(p)
+  mpe = colMeans(p)
+  mape = colMeans(abs(p))
+
+  return(rbind(me, mse, mae, mpe, mape))
+}
+```
+
+```{r test.materr.function, include = FALSE, eval=FALSE}
+#dont delete this!
+tt= rnorm(200, 10, 5) %>% matrix(., ncol = 10) %>% as.data.frame()
+tt[,1] = rnorm(nrow(tt), 100, 20)
+tt[2,2] = 160
+materr(tt)
+```
+
+```{r Ransampling}
+tr_ind = sample(nrow(wide), 0.8*nrow(wide))
+train = wide[tr_ind, ]
+test = wide[-tr_ind,]
+```
+
+### 2.1.1 Additive Advanced Booking Models
+
+```{r ran.apk} 
+#calculating pickup
+ct1 = train[, -2, drop=FALSE]
+for (i in ncol(ct1):1){
+  ct1[,i] = ct1[,1]- ct1[,i]
+}
+ran.apk.avg = data.frame(colMeans(ct1))
+ran.apk.plot = plot(ran.apk.avg[,1], cex=.5,
+     main = 'Additive Pickup', xlab = "Days before arrival", ylab='average pickup')
+```
+
+```{r ran.apk.pre}
+ran.apk.pre = test[, -2] 
+ran.apk.pre[, 2:ncol(ran.apk.pre)] = NA
+
+for (i in 1:(nrow(ran.apk.pre))){
+  ran.apk.pre[i, ] = as.data.frame(t(ran.apk.avg)) + test[i, -2]
+}
+
+ran.apk.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Additive Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+```{r, include = FALSE, eval=FALSE}
+par(mfrow = c(3,2))
+days = sort(sample(1:nrow(ran.apk.pre), 10, replace=FALSE))
+for (i in days){
+  y = ran.apk.pre[i, ]
+  h = ran.apk.pre[i, 1]
+  plot(x = 1:ncol(ran.apk.pre), y = ran.apk.pre[i, ], main = paste('Day',i), xlab='', ylab='')
+  abline(h = ran.apk.pre[i,1], col='red')
+}
+```
+
+```{r ran.apk.err.plot, echo=TRUE, message=FALSE}
+ran.apk.err = materr(ran.apk.pre) %>% as.data.frame()
+ran.apk.plot = melt(setDT(ran.apk.err, keep.rownames = TRUE), 'rn')
+
+par(mfrow = c(1,2))
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.apk.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for Adv.Pickup') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.apk.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Adv.Pickup') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+### 2.1.2 Additive Advance Booking (with weekly differentiation)
+
+```{r r.apk.dow, echo=TRUE}
+ran.apk.wd = train
+for (j in ncol(ran.apk.wd):3){
+  ran.apk.wd[,j] = ran.apk.wd[,1] - ran.apk.wd[,j]
+}
+
+ran.apk.wd = ran.apk.wd %>%
+  group_by(DOW) %>%
+  summarise_at(.vars=names(.)[3:ncol(ran.apk.wd)], .funs='mean')
+
+justplot.rapkwd = melt(ran.apk.wd, id='DOW')
+ggplot(justplot.rapkwd, 
+       aes(x=variable, y=value, group=DOW, color = DOW)) +
+  geom_line() +
+  scale_color_brewer(palette="Accent")+
+  ggtitle('Additive Pickups (by weekday, ran HO)') +
+  xlab('DBA') + ylab('pickups')
+```
+
+```{r r.apk.wd.pred, echo=FALSE}
+ran.apk.wd.pre = test
+ran.apk.wd.pre[, 3:ncol(ran.apk.wd.pre)] = NA
+
+for (i in 1:(nrow(ran.apk.wd.pre))){
+  m = match(ran.apk.wd.pre[i,2], ran.apk.wd$DOW)
+  ran.apk.wd.pre[i,3:ncol(ran.apk.wd.pre)] = 
+    test[i,3:ncol(ran.apk.wd.pre)] + ran.apk.wd[m, 2:ncol(ran.apk.wd)]
+}
+
+ran.apk.wd.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Additive Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+```{r ran.apkwd.err.plot, echo=TRUE, message=FALSE}
+ran.apk.wd.err = materr(ran.apk.wd.pre[,-2]) %>% as.data.frame()
+ran.apk.wd.plot = melt(setDT(ran.apk.wd.err, keep.rownames = TRUE), 'rn')
+
+par(mfrow = c(1,2))
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.apk.wd.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for Adv.Pickup (weekday diff)') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.apk.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Adv.Pickup (weekday diff)') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+
+### 2.1.3 Multiplicative Advance Booking
+```{r ran.mpk} 
+ran.mpk.avg = colMeans(train[,-2]) %>% data.frame() %>% t()
+for (i in ncol(ran.mpk.avg):1){
+  ran.mpk.avg[1,i] = ran.mpk.avg[1,i] / ran.mpk.avg[1,1] 
+}
+
+plot(t(ran.mpk.avg), cex=.5,
+     main = 'Multiplicative Pickup Ratio', xlab = "Days before arrival", ylab='average pickup')
+```
+
+```{r ran.mpk.pre}
+ran.mpk.pre = test[, -2] 
+ran.mpk.pre[, 2:ncol(ran.mpk.pre)] = NA
+
+for (i in 1:(nrow(ran.mpk.pre))){
+  ran.mpk.pre[i, ] = as.data.frame(ran.mpk.avg) + test[i, -2]
+}
+
+ran.mpk.pre[1:10, 1:10]%>%
+  kable(., 'latex', caption = 'Multiplicative Pickup Predictions', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+```
+
+```{r ran.mpk.err.plot, echo=TRUE, message=FALSE}
+ran.mpk.err = materr(ran.mpk.pre) %>% as.data.frame()
+ran.mpk.plot = melt(setDT(ran.mpk.err, keep.rownames = TRUE), 'rn')
+
+par(mfrow = c(1,2))
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.mpk.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for Mult.Pickup') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.mpk.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Multi.Pickup') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+
+
+### 2.1.4 Multiplicative Advance Booking (with weekly differentiation)
+
+```{r ran.mpk.dow} 
+ran.mpk.wd = train
+for (j in ncol(ran.mpk.wd):3){
+  ran.mpk.wd[,j] =  ran.mpk.wd[,j]  / ran.mpk.wd[,1]
+}
+ran.mpk.wd = ran.mpk.wd %>%
+  group_by(DOW) %>%
+  summarise_at(.vars=names(.)[3:(ncol(train))], .funs='mean')
+
+justplot.mpkwd = melt(mpk.wd, id='DOW')
+ran.mpk.wd[, 1:10] %>%
+  kable(., 'latex', caption = 'Mupti Pickup Ratios (by weekday)', 
+        longtable = T, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "repeat_header"))
+#ggplot(justplot.mpkwd, 
+#       aes(x=variable, y=value, group=DOW, color = DOW)) +
+#  geom_line() +
+#  scale_color_brewer(palette="Accent")+
+#  ggtitle('Multi Pickup Ratios (by weekday)') +
+#  xlab('DBA') + ylab('pickups')
+```
+
+```{r ran.mpk.wd.pred} 
+ran.mpk.wd.pre = test
+ran.mpk.wd.pre[, 3:ncol(ran.mpk.wd.pre)] = NA
+
+for (i in 1:(nrow(ran.mpk.wd.pre))){
+  m = match(ran.mpk.wd.pre[i,2], ran.mpk.wd$DOW)
+  ran.mpk.wd.pre[i, 3:ncol(ran.mpk.wd.pre)] = 
+    test[i, 3:ncol(test)]/
+    ran.mpk.wd[m, 2:ncol(ran.mpk.wd)]
+}
+```
+
+```{r plot.multi.wd.prediction}
+plot(x= 1:(ncol(ran.mpk.wd.pre)-1), y= ran.mpk.wd.pre[30, -2],
+     main = paste0('Prediction for ', rownames(ran.mpk.wd.pre[30, -2])),
+     xlab = 'DBA', ylab = 'Predictions')
+abline(h = ran.mpk.wd.pre[30, 1], col = 'red')
+legend(1, 100, legend=c("Predictions", "True"),
+       col=c("black", "red"), lty=1:2, cex=0.8,  box.lty=0)
+```
+
+```{r mpk.wd.err.plot, echo=TRUE, message=FALSE} 
+ran.mpk.wd.err = materr(ran.mpk.wd.pre[,-2]) %>% as.data.frame()
+ran.mpk.wd.plot = melt(setDT(ran.mpk.wd.err, keep.rownames = TRUE), 'rn')
+
+par(mfrow = c(1,2))
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.mpk.wd.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for Mult.Pickup') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.mpk.wd.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Multi.Pickup') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+## 2.2 Regression
+```{r ran.reg.pre, warning=FALSE}
+ran.reg.pred = test
+ran.reg.pred[,3:ncol(ran.reg.pred)] = NA
+
+for (i in 1:(ncol(ran.reg.pred)-2)){
+  this.predictor = paste0('ROH_D',i)
+  lm.formula = paste('True', this.predictor, sep = '~')
+  reg = lm(lm.formula, data = train)
+  for (j in 1:(nrow(ran.reg.pred))){
+    ran.reg.pred[j,(i+2)] = predict(reg, test[j,(i+2), drop = FALSE])
+  }
+}
+```
+
+```{r ran.reg.pred.plot}
+plot(x= 1:(ncol(ran.reg.pred)-1), y= ran.reg.pred[20, -2],
+     main = paste0('Prediction for ', rownames(ran.reg.pred[20, -2])),
+     xlab = 'DBA', ylab = 'Predictions')
+abline(h = ran.reg.pred[20, 1], col = 'red')
+legend(1, 100, legend=c("Predictions", "True"),
+       col=c("black", "red"), lty=1:2, cex=0.8,  box.lty=0)
+```
+
+```{r ran.reg.err}
+ran.reg.err = materr(ran.reg.pred[,-2])
+```
+
+```{r ran.mpk.wd.err.plot, echo=TRUE, message=FALSE}
+ran.reg.err = materr(ran.reg.pred[,-2]) %>% as.data.frame()
+ran.reg.plot = melt(setDT(ran.reg.err, keep.rownames = TRUE), 'rn')
+
+par(mfrow = c(1,2))
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.reg.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for Regression') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.reg.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Regression') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+
+## 2.3 K-NN
+```{r ran.knn.preProcess, messages=FALSE, warning=FALSE}
+#Convert categorical variable into dummy variables
+train.true = train[,1] 
+dow.tr = dummy(train$DOW, sep='.')
+dow.te = dummy(test$DOW, sep='.')
+k.train = cbind(train[, -c(2, nearZeroVar(train))], dow.tr) #no weekday
+k.test = cbind(test, dow.te)[,-2]
+```
+
+### 2.3.1 KNN 
+
+* Repeted cross-validation with 10 folds, repeating 3 times
+* Each time randomly test 8 k-value, then choose the optimal 
+* applied PCA with a threshold of 80%
+
+So for this knn:
+train: all training obs, ncol # of models
+test: using [, 1:ncol], [,2:ncol], ... to generate predictions
+
+```{r ran.knn.pre, cache=TRUE, messages=FALSE, error=TRUE} 
+ran.knn.pre = test[,-2]
+ran.knn.pre[, 2:ncol(ran.knn.pre)] = NA
+
+opk1 = rep(NA, nrow(test))
+for (i in 2:(ncol(k.train)-2)){
+  #each loop takes 1min
+  this.train = k.train[, c(1, i:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, repeats = 3, preProcOptions = list(thresh=0.8)) #for PCA
+  k = train(True~., method='knn', tuneLength = 8, 
+         #tuneGrid = expand.grid(k = 5:15),
+            trControl=train.control, preProcess=c('scale','center','pca'),
+            data=this.train)
+  opk1[i-1] = k$bestTune[[1]]
+  this.test = k.test[, c(i:ncol(k.test))]
+  ran.knn.pre[,i] = predict(k, this.test)
+}
+```
+
+```{r ran.knn.err, cache=TRUE, messages=FALSE}
+ran.knn.err = materr(ran.knn.pre)
+```
+ 
+```{r ran.knn.err.plot} 
+ran.knn.plot = melt(setDT(as.data.frame(ran.knn.err), keep.rownames = TRUE), 'rn')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.knn.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for knn') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.knn.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for knn') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+
+### 2.3.2 Weighted KNN model 
+
+ * Weighted KNN: it uses kernel functions to weight the neighbors according to their distances. Each time we cross-validation find the optimal kernel. 
+ * Euclidean distance
+
+```{r ran.wknn.pred, cache=TRUE, messages=FALSE}
+ran.wknn.pre = test[,-2]
+ran.wknn.pre[, 2:ncol(ran.wknn.pre)] = NA
+
+opk2 = rep(NA, ncol(test))
+for (i in 2:(ncol(k.train)-1)){
+  # 2s per loop
+  this.train = k.train[, c(1, i:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, repeats = 3, preProcOptions = list(thresh=0.8)) #for PCA
+  wk = train.kknn(True~., data = this.train, kmax = 20, 
+                  kernel =  c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
+  opk2[i-1] = wk$best.parameters[[2]]
+  
+  this.test = k.test[, c(1, i:ncol(k.test))]
+  kknn <- kknn(True~., k=opk2[i-1], scale = TRUE, distance=2, 
+               train = this.train, test = this.test,
+               kernel = paste0(toString(wk$best.parameters[[1]])))
+  ran.wknn.pre[,i] = predict(wk, this.test)
+}
+```
+
+```{r ran.wknn.err, cache=TRUE, messages=FALSE}
+ran.wknn.err = materr(ran.wknn.pre)
+```
+
+```{r ran.wknn.err.plot} 
+ran.wknn.plot = melt(setDT(as.data.frame(ran.wknn.err), keep.rownames = TRUE), 'rn')
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.wknn.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for WKnn') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.wknn.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Regression') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+
+### 2.4 Random Forest
+
+We select the 20 most important variables by random forest. 
+
+```{r ran.rf.caret, cache=TRUE} 
+#20 most important variables by RF
+set.seed(996)
+ran.rtree.pred2 = test
+ran.rtree.pred2[3:ncol(ran.rtree.pred2)] = NA
+
+variablebox = data.frame(matrix(0,nrow(test)*20, ncol=20)) #to store the variables
+s1 = Sys.time()
+for (i in 3:(ncol(test)-20)){
+  this.train = train[, c(1, 2, i:ncol(train))] #select true, dow, then looping on ROH_DBA
+  this.train = this.train[, -nearZeroVar(this.train)]  #eliminate zero variance variables
+  #feature selection (top 20)
+  fs = randomForest(True~., data=this.train, importance=TRUE, ntree=100) %>%
+    importance() %>% data.frame() %>%
+    rownames_to_column() %>%
+    arrange(., desc(`X.IncMSE`))
+  
+  imp.20 = fs[1:20,]$rowname
+  variablebox[i-2,] = imp.20
+  
+  this.train = this.train[, c(1, which(colnames(this.train) %in% imp.20))]
+  this.test = test[, c(1, 2, i:ncol(test))] #although this test includes everything, later it only uses top20 features
+  train.control=trainControl(method='repeatedcv', number=10, repeats = 3)
+  r.tree = train(True~., data = this.train, method='rf', 
+                 trControl=train.control, tuneLength = 10
+                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))
+                 )
+  ran.rtree.pred2[, i] = predict(r.tree, this.test, type = 'raw')
+  print(Sys.time()-s1)
+}
+```
+
+```{r ran.rtree.err}
+ran.rtree.err = materr(ran.rtree.pred2[,-c(1,2)])
+```
+
+```{r ran.rtree.err.plot}
+ran.rtree.plot = melt(setDT(as.data.frame(ran.rtree.err), keep.rownames = TRUE), 'rn')
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.rtree.plot , rn %in% c('mae'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Error for rtree') +
+  xlab('DBA') + ylab('MAE')
+
+ggplot(aes(x=variable, y=value, group=rn, color = rn), 
+       data = subset(ran.rtree.plot , rn %in% c('mape'))[-1,]) +
+  geom_line() +
+  ggtitle('Mean Absolute Percentage Error for Regression') +
+  xlab('DBA') + ylab('MAPE')
+```
+
+# 3 General prediction for all hotels
+
+```{r g.data.import, include=FALSE}
+raw <- read.csv("~/Documents/Research/Thesis writing/Data/rawdata.csv") %>%
+  data.frame() %>%
+  mutate_at(., vars(star_rating), as.factor) %>%
+  mutate_at(., vars(StayDate),  funs(as.Date(., "%m/%d/%Y"))) %>%
+  select(-c(inventorytype, GrossRevenue, NetRevenue))
+eyeball <- read.csv("~/Documents/Research/Thesis writing/Data/eyeball (Autosaved).csv") #review score and location
+
+all2 <- raw %>%
+  merge(., eyeball, by = c('ProductID', 'ProductName')) %>%
+  dplyr::arrange(., ProductName, StayDate)
+#summary(all2)
+rohs = dcast(all2, ProductName+StayDate~DBA, value.var = 'Quantity')
+hotel = all2[, -c(1,4,5,7)] %>% unique()  #duplicates removed
+
+for (i in (ncol(rohs)-1):3){
+  rohs[, i] = rohs[, i] + rohs[, i+1]
+}
+
+colnames(rohs)[3:17] = c('True', paste0('ROH_DBA', 1:14))
+```
+
+```{r dataset.preview, echo=FALSE}
+ind = sort(sample(1:2000, 10))
+rohs[ind,]
+hotel[ind,]
+```
+```{r merge.matching, echo=FALSE}
+all = merge(hotel, rohs, by=c('ProductName', 'StayDate'), all.x = TRUE) %>% 
+  arrange(., StayDate) %>% 
+  unique() %>%
+  select(ProductName, StayDate, True, everything())
+```
+
+## 3.1 Sequential Holdout
+
+```{r holdout, echo=FALSE}
+#use the last 14 days as test data
+cutoff = tail(unique(all$StayDate), 14)[1]
+train = all[all$StayDate<cutoff[[1]],-1]
+test = all[all$StayDate>=cutoff[[1]],-1]
+```
+
+### 3.1.z K-NN model 1
+```{r all.knn.pre, cache=TRUE}  
+all.seq.knn.pred = test[, 1:3]
+colnames(all.seq.knn.pred)[3] = 'Pred'
+all.seq.knn.pred$Pred=NA
+
+ss1 = Sys.time()
+for (i in 1:14){
+  this.train = train[, c(2:6, (i+6):ncol(train))]
+  this.test = test[all.seq.knn.pred$StayDate==unique(test$StayDate)[i], c(2:6, (i+6):ncol(train))]
+  train.control = trainControl(method='repeatedcv', number=10, repeats = 3, preProcOptions = list(thresh=0.8))
+  k = train(True~., method='knn', tuneLength = 8, 
+            trControl=train.control, preProcess=c('scale','center','pca'), 
+            data=this.train)
+   opk1[i] = k$bestTune[[1]]
+   
+  all.seq.knn.pred[all.seq.knn.pred$StayDate == unique(test$StayDate)[i], 3] = predict(k, this.test)
+  print(Sys.time()-ss1)
+}
+```
+
+### K-NN Model2
+
+```{r all.wknn.pre, cache=TRUE}
+all.seq.wknn.pred = test[, 1:3]
+colnames(all.seq.wknn.pred)[3] = 'Pred'
+all.seq.wknn.pred$Pred=NA
+opk2 = rep(0, nrow(test))
+kn = rep(0, nrow(test))
+s1=Sys.time()
+for (i in 1:14){
+  this.train = train[, c(2:6, (i+6):ncol(train))]
+  this.test = test[all.seq.knn.pred$StayDate==unique(test$StayDate)[i], c(2:6, (i+6):ncol(train))]
+  k.para = train.kknn(True~., data=this.train, 
+                      kmax=20, 
+                      kernel = c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
+  kn[i] = toString(k.para$best.parameters[[1]])
+  opk2[i] = k.para$best.parameters[[2]]
+  print(Sys.time()-s1)
+  all.seq.wknn.pred[all.seq.wknn.pred$StayDate == unique(test$StayDate)[i], 3] = predict(k.para, this.test)
+}
+```
+
+```{r}
+kn
+opk
+```
+
+
+
+### 3.1.x Random Forest
+```{r all.rf, cache=TRUE}
+all.seq.rf.pred = test[, 1:3]
+colnames(all.seq.rf.pred)[3] = 'Pred'
+all.seq.rf.pred$Pred=NA
+
+for (i in 1:14){
+  this.train = train[, c(2:6, (i+6):ncol(train))]
+  this.test = test[all.seq.rf.pred$StayDate==unique(test$StayDate)[i], c(2:6, (i+6):ncol(train))]
+ # train.control=trainControl(method='repeatedcv', number=1, repeats = 1)
+  rf.model = randomForest(True~., data = this.train, method='rf')
+#  rf.model = train(True~., data = this.train, method='rf')
+              #   trControl=train.control)
+  all.seq.rf.pred[all.seq.rf.pred$StayDate==unique(test$StayDate)[i],] = predict(rf.model, this.test, type='raw') 
+}
+```
+
+
+
+
+
+
+
+
+
+
+
