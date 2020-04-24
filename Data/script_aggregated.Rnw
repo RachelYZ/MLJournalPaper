@@ -190,89 +190,88 @@ ran.reg.err = t(materr(ran.reg.pred1)) %>% data.frame()
 <<ran.nn, echo=FALSE, message=FALSE, warning=FALSE>>=  
 #min-max normalization: retains the original distribution of scores, but this method is not robust
 #standardization: z-score normalization. (uses the arithmetic mean and )
+#  This amounts to pre-conditioning, and removes the effect that a choice in units has on network weights. 
 
 nn.train.scaled=scale(ran.train) #standardization
-scale.list.e2 = attributes(nn.train.scaled)
+#scale.list.e2 = attributes(nn.train.scaled)
 #nn.train.scaled=cbind(nn.train)
-nn.test=ran.test
-nn.test.scaled = scale(nn.test, scale = scale.list.e2$`scaled:scale`, 
-                       center=scale.list.e2$`scaled:center`)
-ran.nn.pred = nn.test
+nn.test.scaled= scale(ran.test) 
+ran.nn.pred = nn.test.scaled %>% data.frame()
 ran.nn.pred[,2:ncol(ran.nn.pred)] = NA
 
 s1=Sys.time()
-for (i in agg){
+for (i in rev(agg)){
   colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
-  this.train = nn.train.scaled[, c(1, colind:ncol(data.frame(nn.train.scaled)))]
-  nn.model = neuralnet(ROH0~., this.train, linear.output=T, )
-  this.test = nn.test.scaled %>% as.data.frame()
+  this.train = nn.train.scaled[, c(1, colind:ncol(nn.train.scaled))]
+  nn.model = neuralnet(ROH0~., this.train, linear.output=T, 
+                       hidden=3, stepmax = 1000000)
+  print('model finished')
+  this.test = nn.test.scaled[,colind:ncol(nn.test.scaled)] %>% 
+    as.data.frame()
   ran.nn.pred[, colind] = predict(nn.model, this.test)
+  print('prediction finished')
+  print(c('i is: ', i, colind))
   print(Sys.time()-s1)
 }
-#write_csv(ran.nn.pred, 'e2.ran.nn.pre.csv')
+write_csv(ran.nn.pred, 'ran.nn.pre.unscaled_04232020.csv')
 #ran.nn.pre.scaled <- read.csv("~/e2.ran.nn.pre.csv", header=ROH0)
 
-ran.nn.pre.us = ran.nn.pred*(scale.list.e2$`scaled:scale`)+
-  scale.list.e2$`scaled:center`
-ran.nn.pre.us[,1] = ran.test$ROH0
-ran.nn.err = materr(ran.nn.pre.us) %>% t() %>% 
+ran.nn.pre.unscaled = t(apply(ran.nn.pred, 1, function(ran.nn.pred) {
+  (ran.nn.pred * attr(nn.test.scaled, 'scaled:scale')) +
+    attr(nn.test.scaled, 'scaled:center')
+}))
+ran.nn.pred.unscaled = ran.nn.pred
+ran.nn.pred.unscaled[,] = NA
+for (i in 1:nrow(ran.nn.pred)){
+  ran.nn.pred.unscaled[i,] = ran.nn.pred[i,]* (apply(ran.test, 2, sd)) + (colMeans(ran.test))
+}
+ran.nn.err = materr(ran.nn.pred.unscaled) %>% t() %>% 
   as.data.frame() 
 @
 
 <<ran.knn, echo=FALSE, message=FALSE, warning=FALSE>>=
-#12:08 ready to run - 1:19 start to run - FINISHED!
 set.seed(0) 
 train.true = ran.train[,1] 
-dow.tr = dummy(ran.train$DOW, sep='.') 
-dow.te = dummy(ran.test$DOW, sep='.')
-k.train = cbind(ran.train[, -c(2, nearZeroVar(ran.train))], dow.tr) 
-k.test = cbind(ran.test, dow.te)[,-2]
-ran.knn.pre = k.test
+ran.knn.pre = ran.test
 ran.knn.pre[,2:ncol(ran.knn.pre)]=NA
 opk= ran.test[1,]
 
+s1 = Sys.time()
 for (i in agg){
   #each loop takes 1min
-  colind = which(names(k.train)==paste0('ROB',i))
-  this.train = k.train[, c(1, colind:ncol(k.train))]
-  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) #for PCA
-  k = train(ROH0~., method='knn', tuneLength = 5, 
-            trControl=train.control, preProcess=c('scale','center','pca'),
+  colind = which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(ran.train))]
+  train.control = trainControl(method='repeatedcv', number=10) 
+  k = train(ROH0~., method='knn', tuneLength = 10, 
+            trControl=train.control, preProcess=c('scale','center'),
             data=this.train)
   opk[, colind] = k$bestTune[[1]]
-  this.test = k.test
+  this.test = ran.test
   ran.knn.pre[,colind] = predict(k, this.test)
+  print(Sys.time()-s1)
 }
 #ran.knn.pre = ran.knn.pre[, 1:13]
 #write_csv(ran.knn.pre, 'ran.knn.pre.csv')
 #ran.knn.pre <- read.csv("~/ran.knn.pre.csv")
-
 ran.knn.err = materr(ran.knn.pre) %>% t() %>% 
   as.data.frame() 
 @
 
 <<wknn, echo=FALSE, message=FALSE, warning=FALSE>>= 
 set.seed(0) 
-ran.wknn.pre = k.test
+ran.wknn.pre = ran.test
 ran.wknn.pre[, 2:ncol(ran.wknn.pre)] = NA 
-
-opk2 = rep(NA, ncol(test)) 
+opk2 = ran.test[1,]
 for (i in agg){
-  # 2s per loop
-  colind=which(names(k.train)==paste0('ROB',i))
-  this.train = k.train[,c(1,colind:ncol(k.train))]
-  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) #for PCA
-  wk = train.kknn(ROH0~., data = this.train, kmax = 20, 
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[,c(1,colind:ncol(ran.train))]
+  train.control = trainControl(method='repeatedcv', number=10) 
+  wk = train.kknn(ROH0~., data = this.train, kmax = 10, 
                   kernel =  c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
-  opk2[i-1] = wk$best.parameters[[2]]
-  
-  this.test = k.test
-#  kknn <- kknn(ROH0~., k=opk2[i-1], scale = ROH0, distance=2, 
-#               train = this.train, test = this.test,
-#               kernel = paste0(toString(wk$best.parameters[[1]])))
+  opk2[colind] = wk$best.parameters[[2]]
+  this.test = ran.test
   ran.wknn.pre[, colind] = predict(wk, this.test)
 }
-ran.wknn.pre = ran.wknn.pre[,1:13]
 ran.wknn.err = materr(ran.wknn.pre)%>% t() %>% 
   as.data.frame() 
 @
@@ -280,67 +279,53 @@ ran.wknn.err = materr(ran.wknn.pre)%>% t() %>%
 <<ran.dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
 set.seed(0) 
 ran.dtree.pred = ran.test
-ran.dtree.pred[,3:ncol(ran.dtree.pred)] = NA
+ran.dtree.pred[,2:ncol(ran.dtree.pred)] = NA
 
-for (i in agg){ 
-  colind=which(names(ran.train)==paste0('ROB',i))
+for (i in agg){  
+  colind=which(names(ran.train)==paste0('ROH',i))
   this.train = ran.train[, c(1, colind:ncol(ran.train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
   this.test = ran.test
   ran.dtree.pred[, colind] = predict(tree.model, this.test)
 }
 
-ran.dtree.err = materr(ran.dtree.pred[,-2]) %>% t() %>% 
+ran.dtree.err = materr(ran.dtree.pred) %>% t() %>% 
   as.data.frame() 
 @
 
 <<ran.rtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
-set.seed(0)  
-ran.rf.pred = ran.test
-ran.rf.pred[,3:ncol(ran.test)] = NA
-s1 = Sys.time()
-for (i in agg){ 
-  colind=which(names(ran.train)==paste0('ROB',i))
-  this.train = ran.train[,c(1,2,colind:ncol(ran.train))]
-  this.test = ran.test
-  train.control=trainControl(method='repeatedcv', number=10)
-  rtt = randomForest(ROH0~., data = this.train)
-  r.tree = train(ROH0~., data = this.train, method='rf',  
-                 trControl=train.control, tuneLength = 12)
-                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))) 
-  print(Sys.time()-s1) 
-  #print(r.tree)
-  ran.rf.pred[, colind] = predict(r.tree, this.test, type = 'raw')
-}
 importance(rtt)
 varImpPlot(rtt)
 varImp(r.tree)
 write_csv(ran.rf.pred, 'rf0722.csv')
 ran.rf.pred=read_csv('rf0722.csv')
-ran.rf.err = materr(ran.rf.pred[,-2])%>% t() %>% 
+ran.rf.err = materr(ran.rf.pred)%>% t() %>% 
   as.data.frame() 
 @
 
 <<ran.svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
 set.seed(0) 
 ran.svm.pred = ran.test   
-ran.svm.pred[,3:ncol(ran.svm.pred)] = NA
-totot = rep(0, 90)
+ran.svm.pred[,2:ncol(ran.svm.pred)] = NA
+support_vector_number = rep(NA, length(agg)+1)
+s1=Sys.time()
 for (i in agg){
-  colind=which(names(ran.train)==paste0('ROB',i))
-  this.train = ran.train[, c(1, colind:ncol(this.train))]
-  svm.model = svm(ROH0~., this.train)
-  totot[i]=svm.model$tot.nSV
-  this.test = ran.test
-  ran.svm.pred[, colind] = predict(svm.model, this.test)
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(ran.train))]
+  optmodelsvm = tune(svm, ROH0~., data = this.train, 
+                     ranges=list(elsilon=seq(0,1,0.1), cost=1:5))
+#  svm.model = svm(ROH0~., data = this.train)
+#  support_vector_number[colind]=svm.model$tot.nSV
+  svm.model = optmodelsvm$best.model
+  ran.svm.pred[, colind] = predict(svm.model, ran.test)
+  print(Sys.time()-s1)
 }
-
-ran.svm.err = materr(ran.svm.pred[,-2]) %>% t() %>% 
-  as.data.frame()
+ran.svm.err
+ran.svm.err.tuned = materr(ran.svm.pred) %>% t() %>% as.data.frame() 
 @
 
 <<ran.results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
-e2_SDE_ALL = cbind(apk = ran.apk.wd.err[-1,5], mpk=ran.mpk.wd.err[-1,5],
+e2_SDE_ALL = cbind(apk = ran.apk.err[-1,5], mpk=ran.mpk.err[-1,5],
               reg = ran.reg.err[-1,5],  nn = ran.nn.err[-1,5],knn = ran.knn.err[-1,5], 
               wknn = ran.wknn.err[-1,5], dtree = ran.dtree.err[-1,5],  
               rf = ran.rf.err[-1,5], svm = ran.svm.err[-1,5] ) %>%
@@ -348,8 +333,8 @@ e2_SDE_ALL = cbind(apk = ran.apk.wd.err[-1,5], mpk=ran.mpk.wd.err[-1,5],
 rownames(e2_SDE_ALL)=rownames(ran.apk.wd.err)[-1]
 e2SDEmelt = melt(as.matrix(e2_SDE_ALL), varnames=c('DBA', 'Model'))
 e2SDEmelt$DBA = factor(e2SDEmelt$DBA, 
-              levels = c('ROB1','ROB2','ROB3','ROB4','ROB5','ROB6','ROB7','ROB14',
-                         'ROB21','ROB30','ROB60','ROB90'))
+              levels = c('ROH1','ROH2','ROH3','ROH4','ROH5','ROH6','ROH7','ROH14',
+                         'ROH21','ROH30','ROH60','ROH90'))
 e2SDEmelt$Model = factor(e2SDEmelt$Model, levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
 ggplot(e2SDEmelt, 
        aes(x=DBA, y=value, group=Model)) +
