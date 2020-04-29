@@ -42,6 +42,8 @@ library(colorspace)
 library(ggplot2)
 library(texreg)
 library(caret)
+library(rpart)
+library(e1071)
 library(forecast)
 options(digits = 3)
 library(neuralnet)
@@ -277,11 +279,11 @@ ran.wknn.err = materr(ran.wknn.pre)%>% t() %>%
 @
 
 <<ran.dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
-set.seed(0) 
+set.seed(0)  
 ran.dtree.pred = ran.test
 ran.dtree.pred[,2:ncol(ran.dtree.pred)] = NA
 
-for (i in agg){  
+for (i in agg){   
   colind=which(names(ran.train)==paste0('ROH',i))
   this.train = ran.train[, c(1, colind:ncol(ran.train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
@@ -294,11 +296,28 @@ ran.dtree.err = materr(ran.dtree.pred) %>% t() %>%
 @
 
 <<ran.rtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
-importance(rtt)
-varImpPlot(rtt)
-varImp(r.tree)
-write_csv(ran.rf.pred, 'rf0722.csv')
-ran.rf.pred=read_csv('rf0722.csv')
+set.seed(0)
+ran.rtree.pred = ran.test
+ran.rtree.pred[, 2:ncol(ran.test)] = NA
+
+variablebox = data.frame(matrix(0,nrow(ran.test)*10, ncol=10)) #to store the variables
+s1 = Sys.time()
+mtry.rf = rep(0, length(agg)+1)
+for (i in agg){
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(ran.train))] #select true, then looping on ROH
+#  r.tree = randomForest(ROH0~., data=this.train)
+  train.control=trainControl(method='repeatedcv', number=10)
+  r.tree = train(ROH0~., data = this.train, method='rf', 
+               trControl=train.control, metric = 'RMSE')
+                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))
+              #   )
+  mtry.rf[colind] = r.tree$bestTune
+  ran.rtree.pred[, colind] = predict(r.tree, ran.test, type = 'raw')
+  print(Sys.time()-s1)
+}
+
+write_csv(ran.rtree.pred, 'rf0426.csv')
 ran.rf.err = materr(ran.rf.pred)%>% t() %>% 
   as.data.frame() 
 @
@@ -307,7 +326,7 @@ ran.rf.err = materr(ran.rf.pred)%>% t() %>%
 set.seed(0) 
 ran.svm.pred = ran.test   
 ran.svm.pred[,2:ncol(ran.svm.pred)] = NA
-support_vector_number = rep(NA, length(agg)+1)
+support_vector_number = rep(NA, length(agg)+1) 
 s1=Sys.time()
 for (i in agg){
   colind=which(names(ran.train)==paste0('ROH',i))
@@ -326,7 +345,7 @@ ran.svm.err.tuned = materr(ran.svm.pred) %>% t() %>% as.data.frame()
 
 <<ran.results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
 e2_SDE_ALL = cbind(apk = ran.apk.err[-1,5], mpk=ran.mpk.err[-1,5],
-              reg = ran.reg.err[-1,5],  nn = ran.nn.err[-1,5],knn = ran.knn.err[-1,5], 
+              reg = ran.reg.err[-1,5],  nn = ran.nn.err[-1,5], knn = ran.knn.err[-1,5], 
               wknn = ran.wknn.err[-1,5], dtree = ran.dtree.err[-1,5],  
               rf = ran.rf.err[-1,5], svm = ran.svm.err[-1,5] ) %>%
   as.data.frame() 
