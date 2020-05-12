@@ -1,0 +1,766 @@
+\documentclass[master,tocprelim]{cornell}
+\usepackage{booktabs}         % reqired for booktabs=T
+\usepackage[backend= biber]{biblatex}
+\usepackage[table]{xcolor}    % required for "striped"
+\addbibresource{LR.bib}
+
+\usepackage{graphicx,pstricks}
+\usepackage{graphics}
+\usepackage{moreverb}
+\usepackage{subfigure}
+\usepackage{epsfig}
+\usepackage{hangcaption}
+\usepackage{txfonts}
+\usepackage{palatino}
+\graphicspath{ {figures/} }
+ \usepackage{booktabs}
+ \usepackage{longtable}
+ \usepackage{array}
+ \usepackage{multirow}
+ \usepackage{wrapfig}
+ \usepackage{float}
+ \usepackage{colortbl}
+ \usepackage{pdflscape}
+ \usepackage{tabu}
+ \usepackage{threeparttable}
+ \usepackage{threeparttablex}
+ \usepackage[normalem]{ulem}
+ \usepackage{makecell}
+ \usepackage{xcolor}
+
+
+\begin{document}
+
+\chapter{sample}
+
+He said it is cool\cite{tkh1998}.
+
+<<loadpackages, echo=FALSE, message=FALSE, warning=FALSE>>=
+library(kableExtra)
+library(tidyverse)
+library(neuralnet)
+library(dplyr)
+library(reshape2)
+library(colorspace)
+library(ggplot2)
+library(texreg)
+library(caret)
+library(forecast)
+options(digits = 3)
+library(kknn)
+library(e1071)
+library(dummies)
+library(rpart)
+@
+
+<<loaddata, echo=FALSE, message=FALSE, warning=FALSE>>=
+arr <- read.csv("~/Documents/Research/Thesis writing/NewData/Arr.csv") %>% 
+  data.frame()%>%
+  select(Arrival.Date, Booking.Window, Quantity) %>%
+  mutate_at(., vars(Arrival.Date),  funs(as.Date(., "%m/%d/%Y")))
+dt = arr %>%
+  group_by(Arrival.Date, Booking.Window) %>%
+  mutate(Quan = sum(Quantity)) %>%
+  dplyr::arrange(., Arrival.Date, Booking.Window) 
+dt = dt[-(1:2),-3] #throw out the first two observations to avoid inconsistency
+foo = function(x){
+  require(dplyr)
+  new = as.Date(x, '%y.%m.%d') %>%
+     format(., '20%y-%m-%d') %>%
+    as.Date()
+  return (new)
+}
+dt$Arrival.Date = foo(dt$Arrival.Date)
+wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>% 
+  data.frame() %>%
+  arrange(., Arrival.Date)
+
+for (i in (ncol(wide)-1):2){
+  wide[i] = wide[i] + wide[i+1] 
+}
+wide[,3] = as.factor(weekdays(wide$Arrival.Date))
+colnames(wide) = c('Arrival.Date', 'ROH_0', 'DOW', paste0('ROH', 1:(ncol(wide)-3)))
+
+wide$DOW <- ordered(wide$DOW, levels=c("Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+wide = wide %>%
+  remove_rownames %>% column_to_rownames('Arrival.Date')
+
+kable(wide[1:10, 1:10], 'latex', caption = 'Experiment 1: Data Overview',
+        longtable = F, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
+
+
+ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH_0)) +  
+  geom_line() +
+  theme_minimal()+
+  xlab("Stay Date") + ylab('Final Arrivals') + 
+  theme(plot.caption = element_text(hjust = 0))
+@
+
+<<e2.ran.cv, echo=FALSE, message=FALSE, warning=FALSE>>=
+materr = function(data){ 
+  require(dplyr)
+  m = data 
+  for (j in 2:ncol(data)){
+    m[,j] = (data[,j] - data[,1]) #calculating errors for each forecast
+  }
+  ME = colMeans(m)
+  MAE = colMeans(abs(m))
+  SD = apply(m,2,sd)
+  
+  p = data
+  for (i in 2:ncol(p)){
+    p[, i] = m[,i] / data[,1]
+  }
+  MPE = colMeans(p)
+  MAPE = colMeans(abs(p))
+
+  return(rbind(ME,MAE,MPE,MAPE,SD))
+} 
+
+set.seed(2020) 
+tr_ind = sample(nrow(wide), 0.8*nrow(wide))
+agg = c(1,2,3,4,5,6,7,14,21,30,60,90)
+ran.train = wide[tr_ind, c(1,2,agg+2)]
+ran.test = wide[-tr_ind, c(1,2,agg+2)]
+@
+
+<<ran.apk, echo=FALSE, message=FALSE, warning=FALSE>>=  
+ran.apk.wd = ran.train    
+for (j in ncol(ran.apk.wd):3){
+  ran.apk.wd[,j] = ran.apk.wd[,1] - ran.apk.wd[,j]
+}
+
+ran.apk.wd = ran.apk.wd %>%
+  group_by(DOW) %>%
+  summarise_at(.vars=names(.)[3:ncol(ran.apk.wd)], .funs='mean')
+
+ran.apk.wd.pre = ran.test
+ran.apk.wd.pre[, 3:ncol(ran.apk.wd.pre)] = NA
+
+for (i in 1:(nrow(ran.apk.wd.pre))){
+  m = match(ran.apk.wd.pre[i,2], ran.apk.wd$DOW)
+  ran.apk.wd.pre[i,3:ncol(ran.apk.wd.pre)] = 
+    ran.test[i,3:ncol(ran.apk.wd.pre)] + ran.apk.wd[m, 2:ncol(ran.apk.wd)]
+}
+
+ran.apk.wd.err = t(materr(ran.apk.wd.pre[,-2])) %>% data.frame() 
+@
+
+<<ran.mpk, echo=FALSE, message=FALSE, warning=FALSE>>=  
+ran.mpk.wd = ran.train 
+for (j in ncol(ran.mpk.wd):3){
+  ran.mpk.wd[,j] =  ran.mpk.wd[,j]  / ran.mpk.wd[,1]
+}
+ran.mpk.wd = ran.mpk.wd %>%
+  group_by(DOW) %>% 
+ summarise_at(.vars=names(.)[3:(ncol(ran.train))], .funs='mean')
+
+ran.mpk.wd.pre = ran.test
+ran.mpk.wd.pre[, 3:ncol(ran.mpk.wd.pre)] = NA
+
+for (i in 1:(nrow(ran.mpk.wd.pre))){
+  m = match(ran.mpk.wd.pre[i,2], ran.mpk.wd$DOW)
+  ran.mpk.wd.pre[i, 3:ncol(ran.mpk.wd.pre)] = 
+    ran.test[i, 3:ncol(ran.mpk.wd.pre)]/
+    ran.mpk.wd[m, 2:ncol(ran.mpk.wd)]} 
+#NA because the dinominator=0
+
+ran.mpk.wd.err = materr(ran.mpk.wd.pre[,-2]) %>% t() %>% 
+  as.data.frame() 
+@
+
+<<ran.reg, echo=FALSE, message=FALSE, warning=FALSE>>= 
+ran.reg.pred1 = ran.test
+ran.reg.pred1[,3:ncol(ran.reg.pred1)] = NA
+reg = vector(mode='list', length=90)
+for (i in agg){ 
+  these.predictor = paste0(c('DOW', paste0('ROH',agg[which(agg==i)])), collapse='+')
+  lm.formula = paste('ROH_0', these.predictor, sep = '~')
+  reg[[i]] = lm(lm.formula, data = ran.train)
+  ran.reg.pred1[, which(names(ran.reg.pred1)==paste0('ROH',i))]=predict(reg[[i]], ran.test)
+}
+ran.reg.err = materr(ran.reg.pred1[,-2]) %>% t() %>% 
+  as.data.frame() 
+@
+
+<<ran.nn, echo=FALSE, message=FALSE, warning=FALSE>>=  
+set.seed(2020)
+nn.train.scaled=scale(ran.train[,-2]) #standardization
+nn.test.scaled= scale(ran.test[,-2]) 
+dow.tr = dummy(ran.train$DOW, sep='.')
+dow.te = dummy(ran.test$DOW, sep='.')
+nn.train.scaled = cbind(dow.tr, nn.train.scaled)
+nn.test.scaled = cbind(dow.te, nn.test.scaled)
+nn.pred = nn.test.scaled %>% data.frame()
+nn.pred[, 9:ncol(nn.pred)] = NA
+
+s1=Sys.time()
+for (i in rev(agg)){
+  colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
+  this.train = nn.train.scaled[, c(1:8, colind:ncol(nn.train.scaled))]
+  nn.model = neuralnet(ROH_0~., this.train, linear.output=T, 
+                       hidden=3, stepmax = 1000000)
+  this.test = nn.test.scaled[, c(1:8, colind:ncol(nn.test.scaled))] %>% as.data.frame()
+  nn.pred[, colind] = predict(nn.model, this.test) 
+}
+time.nn = Sys.time() - s1
+write_csv(nn.pred, 'nn.pre.unscaled_04292020.csv')
+#nn.pred = read_csv('nn.pre.unscaled_04292020.csv')
+nn.pred = nn.pred[, -(1:7)]
+nn.pred.unscaled = nn.pred
+nn.pred.unscaled[,] = NA
+for (i in 1:nrow(nn.pred)){
+  nn.pred.unscaled[i,] = nn.pred[i,]* (apply(ran.test[,-2], 2, sd)) + (colMeans(ran.test[,-2]))
+}
+nn.err = materr(nn.pred.unscaled) %>% t() %>% 
+  as.data.frame() 
+@
+
+<<ran.knn, echo=FALSE, message=FALSE, warning=FALSE>>=
+set.seed(2020) 
+k.train = cbind(dow.tr, ran.train[,-2])
+k.test = cbind(dow.te, ran.test[,-2]) 
+ran.knn.pre = ran.test[,-2]
+ran.knn.pre[,2:ncol(ran.knn.pre)]=NA
+opk= rep(NA, length(agg))
+s1=Sys.time()
+for (i in agg){
+  colind = which(names(k.train)==paste0('ROH',i))
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) #for PCA
+  k = train(ROH_0~., method='knn', tuneLength = 5, 
+            trControl=train.control, preProcess=c('scale','center','pca'),
+            data=this.train)
+  opk[colind-8] = k$bestTune[[1]]
+  this.test = k.test
+  ran.knn.pre[,colind-7] = predict(k, this.test)
+}
+time.knn = Sys.time() - s1
+ran.knn.err = materr(ran.knn.pre) %>% t() %>% 
+  as.data.frame() 
+@
+
+<<wknn, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(2020) 
+ran.wknn.pre = ran.test[,-2]
+ran.wknn.pre[, 2:ncol(ran.wknn.pre)] = NA 
+opk2 = rep(NA, ncol(test)) 
+s1=Sys.time()
+for (i in agg){
+  # 2s per loop
+  colind = which(names(k.train)==paste0('ROH',i))
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) 
+  wk = train.kknn(ROH_0~., data = this.train, kmax = 20, 
+                  kernel =  c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
+  opk2[colind-8] = wk$best.parameters[[2]]
+#  kknn <- kknn(ROH_0~., k=opk2[i-1], scale = ROH_0, distance=2, 
+#               train = this.train, test = this.test,
+#               kernel = paste0(toString(wk$best.parameters[[1]])))
+  ran.wknn.pre[, colind-7] = predict(wk, k.test)
+}
+time.wknn = Sys.time() - s1
+ran.wknn.err = materr(ran.wknn.pre)%>% t() %>% 
+  as.data.frame() 
+@
+<<ran.dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(2020) 
+ran.dtree.pred = ran.test
+ran.dtree.pred[,3:ncol(ran.dtree.pred)] = NA
+s1=Sys.time()
+
+for (i in agg){ 
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(ran.train))]
+  tree.model = rpart(ROH_0~., data=this.train, method='anova')
+  this.test = ran.test
+  ran.dtree.pred[, colind] = predict(tree.model, this.test)
+}
+time.dtree = Sys.time() - s1
+ran.dtree.err = materr(ran.dtree.pred[,-2]) %>% t() %>% 
+  as.data.frame() 
+@
+<<ran.rtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(2020)  
+ran.rf.pred = ran.test
+ran.rf.pred[,3:ncol(ran.test)] = NA
+rf.mtry = rep(NA, length(agg))
+s1 = Sys.time()
+for (i in agg){ 
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[,c(1,2,colind:ncol(ran.train))]
+  train.control = trainControl(method='repeatedcv', number=10)
+ # rtt = randomForest(ROH_0~., data = this.train)
+  r.tree = train(ROH_0~., data = this.train, method='rf',  
+                 trControl=train.control, tuneLength = 12)
+                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))) 
+  rf.mtry[colind-2] = r.tree$bestTune[[1]]
+  #print(r.tree)
+  ran.rf.pred[, colind] = predict(r.tree, ran.test, type = 'raw')
+}
+time.rff = Sys.time() - s1
+#importance(rtt)
+#varImpPlot(r.tree)
+#varImp(r.tree)
+write_csv(ran.rf.pred, 'rf_wd_pred.csv')
+ran.rf.err = materr(ran.rf.pred[,-2])%>% t() %>% 
+  as.data.frame() 
+@
+
+<<ran.svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(2020) 
+ran.svm.pred = ran.test   
+ran.svm.pred[, 3:ncol(ran.svm.pred)] = NA
+totot = rep(0, 90)
+for (i in agg){
+  colind = which(names(k.train)==paste0('ROH',i))
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  svm.model = svm(ROH_0~., this.train)
+  totot[i]=svm.model$tot.nSV
+  ran.svm.pred[, colind-6] = predict(svm.model, k.test)
+}
+
+ran.svm.err = materr(ran.svm.pred[,-2]) %>% t() %>% 
+  as.data.frame()
+@
+
+<<ran.results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
+e2_SDE_ALL = cbind(apk = ran.apk.wd.err[-1,5], mpk=ran.mpk.wd.err[-1,5],
+              reg = ran.reg.err[-1,5],  nn = ran.nn.err[-1,5],knn = ran.knn.err[-1,5], 
+              wknn = ran.wknn.err[-1,5], dtree = ran.dtree.err[-1,5],  
+              rf = ran.rf.err[-1,5], svm = ran.svm.err[-1,5] ) %>%
+  as.data.frame() 
+rownames(e2_SDE_ALL)=rownames(ran.apk.wd.err)[-1]
+e2SDEmelt = melt(as.matrix(e2_SDE_ALL), varnames=c('DBA', 'Model'))
+e2SDEmelt$DBA = factor(e2SDEmelt$DBA, 
+              levels = c('ROB1','ROB2','ROB3','ROB4','ROB5','ROB6','ROB7','ROB14',
+                         'ROB21','ROB30','ROB60','ROB90'))
+e2SDEmelt$Model = factor(e2SDEmelt$Model, levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+ggplot(e2SDEmelt, 
+       aes(x=DBA, y=value, group=Model)) +
+  geom_line(aes(color=Model,linetype=Model), size=0.5)+
+  geom_point(aes(color=Model, shape=Model), size=1.8)+
+  scale_linetype_manual('', values=c('solid', 'solid', 'dotted',
+                                     'dotted', 'dotted', 'dotted',
+                                     'solid', 'solid', 'solid'))+
+  scale_shape_manual('', values=c(0,1,5,4,0,1,2,5,4)) + 
+  scale_color_manual('', values = c('#999999', '#999999', #pickup- red
+                                '#000000', '#000000', #reg+nn: blue
+                                '#999999', '#999999', #KNN: yellow
+                                '#000000','#000000', #Tree: green
+                                '#000000')) + #SVM: 
+  xlab('DBA') + ylab('Standard Deviation of Errors') +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+
+
+e2_SDE_ALL[13,] = colMeans(e2_SDE_ALL)
+kable(e2_SDE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+      booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "repeat_header"))
+#write.csv(cbind(MEALL, MAEALL, MPEALL, MAPEALL, SD), "ran_e1_bycutoff.csv")
+
+@
+
+<<e2.me, echo=FALSE, message=FALSE, warning=FALSE>>=
+e2_ME_ALL = cbind(apk = ran.apk.wd.err[-1,1], mpk=ran.mpk.wd.err[-1,1],
+              reg = ran.reg.err[-1,1], nn = ran.nn.err[-1,1], knn = ran.knn.err[-1,1], 
+              wknn = ran.wknn.err[-1,1], dtree = ran.dtree.err[-1,1],  
+              rf = ran.rf.err[-1,1], svm = ran.svm.err[-1,1]) %>%
+  as.data.frame() 
+rownames(e2_ME_ALL)=rownames(ran.apk.wd.err)[-1]
+e2MEmelt = melt(as.matrix(e2_ME_ALL), varnames=c('DBA', 'Model'))
+e2MEmelt$DBA = factor(e2MEmelt$DBA, 
+              levels = c('ROB1','ROB2','ROB3','ROB4','ROB5','ROB6','ROB7','ROB14',
+                         'ROB21','ROB30','ROB60','ROB90'))
+e2MEmelt$Model = factor(e2MEmelt$Model, levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+ggplot(e2MEmelt, 
+       aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model,linetype=Model), size=0.5)+
+  geom_point(aes(color=Model, shape=Model), size=1.8)+
+  scale_linetype_manual('', values=c('solid', 'solid', 'dotted',
+                                     'dotted', 'dotted', 'dotted',
+                                     'solid', 'solid', 'solid'))+
+  scale_shape_manual('', values=c(0,1,5,4,0,1,2,5,4)) + 
+  scale_color_manual('', values = c('#999999', '#999999', #pickup- red
+                                '#000000', '#000000', #reg+nn: blue
+                                '#999999', '#999999', #KNN: yellow
+                                '#000000','#000000', #Tree: green
+                                '#000000')) + #SVM: 
+  xlab('DBA') + ylab('Mean Errors') +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+e2_ME_ALL[13,] = colMeans(e2_ME_ALL)
+kable(e2_ME_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+      booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "repeat_header"))
+
+
+e2_MAE_ALL = cbind(apk = ran.apk.wd.err[-1,2], mpk=ran.mpk.wd.err[-1,2],
+              reg = ran.reg.err[-1,2],  nn = ran.nn.err[-1,2], knn = ran.knn.err[-1,2], 
+              wknn = ran.wknn.err[-1,2], dtree = ran.dtree.err[-1,2],  
+              rf = ran.rf.err[-1,2], svm = ran.svm.err[-1,2]) %>%
+  as.data.frame() 
+rownames(e2_MAE_ALL)=rownames(ran.apk.wd.err)[-1]
+e2MAEmelt = melt(as.matrix(e2_MAE_ALL), varnames=c('DBA', 'Model'))
+e2MAEmelt$DBA = factor(e2MAEmelt$DBA, 
+              levels = c('ROB1','ROB2','ROB3','ROB4','ROB5','ROB6','ROB7','ROB14',
+                         'ROB21','ROB30','ROB60','ROB90'))
+e2MAEmelt$Model = factor(e2MAEmelt$Model, levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+ggplot(e2MAEmelt, 
+       aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model, shape=Model), size=1)+
+  geom_point(aes(color=Model,shape=Model),  size=2)+
+#  scale_fill_manual(values = colorRampPalette(brewer.pal(12, "Paired"))(12)) +
+#  scale_color_brewer(palette="Paired") +
+  scale_linetype_manual('', values=c('solid', 'solid', 'dotted',
+                                     'dotted', 'dotted', 'dotted',
+                                     'solid', 'solid', 'solid'))+
+  scale_shape_manual('', values=c(0,1,5,4,0,1,2,5,4)) + 
+  scale_color_manual('', values = c('#999999', '#999999', #pickup- red
+                                '#000000', '#888888', #reg+nn: blue
+                                '#999999', '#999999', #KNN: yellow
+                               '#000000','#000000', #Tree: green
+                                '#ffbf00')) + #SVM: 
+  xlab('DBA') + ylab('Mean Absolute Errors') +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+e2_MAE_ALL[13,] = colMeans(e2_MAE_ALL)
+kable(e2_MAE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+      booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "repeat_header"))
+
+@
+
+
+\section*{e4}
+
+<<e4.setup echo=FALSE, message=FALSE, warning=FALSE>>= 
+raw <- read.csv("~/Documents/Research/Thesis writing/Data/rawdata.csv") %>% 
+  data.frame() %>%
+  mutate_at(., vars(star_rating), as.factor) %>%
+  mutate_at(., vars(StayDate),  funs(as.Date(., "%m/%d/%Y"))) %>%
+  select(-c(inventorytype, GrossRevenue, NetRevenue))
+eyeball <- read.csv("~/Documents/Research/Thesis writing/Data/eyeball (Autosaved).csv")
+#review score and location
+
+#all <- raw %>%
+#  merge(., eyeball, by = c('ProductID', 'ProductName')) %>%
+#  group_by(ProductName, StayDate, DBA) %>%
+#  mutate(ADR = mean(ADR), acc=cumsum(Quantity)) %>%
+#  mutate(booking_eachDBA = max(acc)) %>%
+#  distinct(StayDate, DBA, booking_eachDBA, .keep_all = TRUE) %>%
+#  arrange(., StayDate, ProductName, desc(DBA)) %>%
+#  ungroup() %>% group_by(ProductName, StayDate) %>%
+#  mutate(ROH = cumsum(booking_eachDBA)) %>%
+#  mutate(ROH_0 = max(ROH)) %>%
+#  arrange(., StayDate, ProductName, desc(DBA)) %>%
+#  select(ProductName, StayDate, ROH_0, DBA, ADR, ROH, star_rating, review_score, location)
+
+booking_curve = dcast(raw, ProductName+StayDate~DBA, fill=0,value.var='Quantity') %>%
+  data.frame() 
+for (i in 16:3){
+  booking_curve[,i] = booking_curve[,i]+booking_curve[,i+1]
+}
+colnames(booking_curve)[3:17]=paste0('ROH_', 0:14)
+
+prices = dcast(raw, ProductName+StayDate~DBA, fill=0,value.var='ADR', mean) %>% data.frame()
+colnames(prices)[3:17]=paste0('ADR_', 0:14)
+for (i in 17:3){
+  prices[which(prices[,i]==0), i] = rowMeans(prices[which(prices[,i]==0),-c(1,2)])
+}
+
+all = merge(booking_curve, prices, by=c('ProductName', "StayDate")) %>%
+  merge(., eyeball[,c(2:4)], by='ProductName') %>%
+  merge(., raw[,c(2,6)], by='ProductName') %>% distinct()
+@
+
+<<e4.setup echo=FALSE, message=FALSE, warning=FALSE>>=
+materr = function(data){ 
+  require(dplyr)
+  m = data 
+  for (j in 2:ncol(data)){
+    m[,j] = (data[,j] - data[,1]) #calculating errors for each forecast
+  }
+  ME = colMeans(m)
+  MAE = colMeans(abs(m))
+  SD = apply(m,2,sd)
+  
+  p = data
+  for (i in 2:ncol(p)){
+    p[, i] = m[,i] / data[,1]
+  }
+  MPE = colMeans(p)
+  MAPE = colMeans(abs(p))
+
+  return(rbind(ME,MAE,MPE,MAPE,SD))
+} 
+set.seed(0) 
+ran_train_ind = sample(nrow(all), 0.8*nrow(all))
+mran.train = all[ran_train_ind,]
+mran.test = all[-ran_train_ind,] 
+#nrow(mran.train)
+#nrow(mran.test)
+@
+
+<<e4.adpk echo=FALSE, message=FALSE, warning=FALSE>>=  
+apk=mran.train[1,3:17]
+for (i in 1:15){
+  apk[1,i]= mean(mran.train[,3]-mran.train[,i+2])
+}
+
+e4apk.pre = mran.test 
+for (i in 1:14){
+    e4apk.pre[,i+4]=e4apk.pre[,i+4]+apk[1,i+1]
+}
+e4apk.pre = e4apk.pre[,3:17]
+e4apk.err.g = materr(e4apk.pre)
+@
+
+<<e4.mtpk echo=FALSE, message=FALSE, warning=FALSE>>=  
+mpk = mran.train[1,3:17]
+for (i in 1:15){
+  mpk[1,i]= mean(mran.train[,i+2]/mran.train[,3])
+}
+e4mpk.pre = mran.test
+for (i in 1:14){
+  e4mpk.pre[,i+4]=e4mpk.pre[,i+4]/mpk[1,i+1]
+}
+e4mpk.pre=e4mpk.pre[,3:17]
+e4mpk.err.g = materr(e4mpk.pre)
+@
+
+<<e4_reg, echo=FALSE, message=FALSE, warning=FALSE>>=
+lr.pred = mran.test 
+lr.model = vector(mode='list', length=14)
+#head(this.train)
+#ncol(mran.train)
+for (i in 1:14){
+  this.train=mran.train[,c(3, (i+3):17, (i+18):32, 33:35)]
+  lr.model[[i]] = lm(ROH_0~., data=this.train)
+  this.test=mran.test[, c((i+3):17, (i+18):32, 33:35)]
+  lr.pred[,i+3]=predict(lr.model[[i]], this.test)
+}
+lr.pred=lr.pred[,3:17]
+lr.err = materr(lr.pred)
+texreg(list(lr.model[[1]], lr.model[[2]], lr.model[[3]], lr.model[[4]], lr.model[[5]], lr.model[[6]], lr.model[[7]], lr.model[[8]],lr.model[[9]],lr.model[[10]],lr.model[[11]],lr.model[[12]],lr.model[[13]],lr.model[[14]]), booktabs = TRUE, longtable = TRUE)
+
+
+lr.pred2 = mran.test 
+lr.model2 = vector(mode='list', length=14)
+head(this.test)
+ncol(mran.train)
+for (i in 1:14){
+  this.train=mran.train[,c(3, (i+3), (i+18), 33:35)]
+  lr.model2[[i]] = lm(ROH_0~., data=this.train)
+  this.test=mran.test[,c((i+3), (i+18), 33:35)]
+  lr.pred2[,i+3]=predict(lr.model2[[i]], this.test)
+}
+lr.pred2=lr.pred2[,3:17]
+e4reg.err.g = materr(lr.pred2)
+
+ls=summary(lr.model2[[5]])
+texreg( lr.model2[[5]])
+texreg(list(lr.model2[[1]], lr.model2[[2]], lr.model2[[3]], lr.model2[[4]], lr.model2[[5]], lr.model2[[6]], lr.model2[[7]], lr.model2[[8]],lr.model2[[9]],lr.model2[[10]],lr.model2[[11]],lr.model2[[12]],lr.model2[[13]],lr.model2[[14]]), booktabs = TRUE, longtable = TRUE)
+@
+
+<<e4_nn, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(20)
+ran.train.scaled = scale(mran.train[, -c(1,2,35)])
+ran.scale.para = attributes(ran.train.scaled)
+ran.train.scaled = cbind(ran.train.scaled, star_rating=mran.train$star_rating) %>% 
+  data.frame()
+
+ran.test.scaled = scale(mran.test[, -c(1,2,35)], scale=ran.scale.para$`scaled:scale`, 
+                    center=ran.scale.para$`scaled:center`)
+ran.test.scaled = cbind(ran.test.scaled, star_rating=mran.test$star_rating) %>% data.frame()
+
+test.box.nn = ran.test.scaled
+nn.model = vector(mode='list', length=14)
+for (i in 1:14){
+  this.train = ran.train.scaled[, c(1, (i+1):15, (i+16):33)]
+  nn.model[[i]] = neuralnet(ROH_0~., 
+                            this.train, threshold = 0.5, 
+                            hidden = 2, 
+                            linear.output = F, stepmax = 1e+06)
+  this.test = ran.test.scaled[, c((i+1):15, (i+16):33)]
+  test.box.nn[,i+1] = predict(nn.model[[i]], this.test)
+}
+test.box.nn = test.box.nn[,1:15]
+#unscaling
+test.box.nn.us=test.box.nn
+for (t in 1:15){
+  test.box.nn.us[,t] =(test.box.nn[,t])*(ran.scale.para$`scaled:scale`[t])+
+    ran.scale.para$`scaled:center`[t]
+}
+e4nn.err.g = materr(test.box.nn.us) 
+@
+
+<<e4_knn, echo=FALSE, message=FALSE, warning=FALSE>>=  
+set.seed(20)
+test.box.knn = mran.test 
+knn.model = vector(mode='list', length=14) 
+ss1=Sys.time()
+for (i in 1:14){
+  this.train = mran.train[,c(3, (i+3):17, (i+18):32, 33:35)]
+  train.control = trainControl(method='repeatedcv', number=10, 
+                               preProcOptions = list(thresh=0.8))
+  knn.model[[i]] = train(ROH_0~., method='knn', tuneLength = 3, 
+                         trControl=train.control, 
+                         preProcess=c('scale','center','pca'), data=this.train)
+  this.test=mran.test[,c((i+3):17, (i+18):32, 33:35)]
+  test.box.knn[,i+3]= predict(knn.model[[i]], this.test)
+  print(Sys.time()-ss1)
+}
+test.box.knn=test.box.knn[,3:17]
+e4knn.err.g = materr(test.box.knn) 
+@
+
+<<e4_wknn, echo=FALSE, message=FALSE, warning=FALSE>>=  
+set.seed(20)
+test.box.wknn = mran.test 
+wknn.model = vector(mode='list', length=14)
+wknn.k=rep(NA, 14)
+wknn.kernel=rep(NA, 14)
+ss1=Sys.time()
+for (i in 1:14){
+  this.train = mran.train[,c(3, (i+3):17, (i+18):32, 33:35)]
+  wknn.para = train.kknn(ROH_0~., data=this.train, kmax=50, 
+                         kernel = c("rectangular", "triangular", 
+                                    "epanechnikov", "gaussian", "rank", "optimal"))
+  wknn.k[i]=as.numeric(wknn.para[[5]]$k)
+  wknn.kernel[i]=wknn.para[[5]]$kernel
+  this.test = mran.test[,c(3, (i+3):17, (i+18):32, 33:35)]
+  wknn.model[[i]]= kknn(ROH_0~., k=wknn.k[i], scale=TRUE, 
+                        distance=2, #euclidean distance
+                    train=this.train, test=this.test, 
+                    kernel=paste0(wknn.kernel[i]))
+  test.box.wknn[,i+3] = predict(wknn.model[[i]], newdata=this.test)
+  print(Sys.time()-ss1)
+  }
+test.box.wknn=test.box.wknn[,3:17]
+e4wknn.err.g = materr(test.box.wknn)
+@
+
+<<e4_dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(20)
+test.box.dtree = mran.test 
+tree.model = vector(mode='list', length=14)
+
+for (i in 1:14){
+  this.train = mran.train[,c(3, (i+3):17, (i+18):32, 33:35)]
+  tree.model[[i]] = rpart(ROH_0~., data=this.train, method='anova')
+  this.test = mran.test[,c(3, (i+3):17, (i+18):32, 33:35)]
+  test.box.dtree[,i+3] = predict(tree.model[[i]], newdata=this.test)
+}
+test.box.dtree=test.box.dtree[,3:17]
+e4dtree.err.g = materr(test.box.dtree)
+@
+
+<<e4_rf, echo=FALSE, message=FALSE, warning=FALSE>>=
+set.seed(20)
+test.box.rf = mran.test
+rf.model = vector(mode='list', length=14)
+head(this.train)
+for (i in 1:14){
+  s1=Sys.time() 
+  this.train = mran.train[,c(3, (i+3):17, (i+18):32, 33:35)] %>% 
+    mutate(star_rating=as.numeric(star_rating))
+  train.control=trainControl(method='repeatedcv', number=3, repeats=1)
+  tunegrid = expand.grid(.mtry=sort(sample(15:50, 10)))
+  this.test = mran.test[, c((i+3):17, (i+18):32, 33:35)] %>% 
+    mutate(star_rating=as.numeric(star_rating))
+  rf.model[[i]] = train(ROH_0~., data = this.train, method='rf', 
+                 trControl=train.control, tuneGrid=tunegrid, 
+             importance= TRUE)
+#  rrff = randomForest(ROH_0~., data=this.train, mtry=2)
+  test.box.rf[,i+3] = predict(rf.model[[i]], newdata=this.test)
+  print(Sys.time()-s1)
+}
+test.box.rf=test.box.rf[,3:17]
+e4rf.err.g = materr(test.box.rf) 
+@
+
+<<e4_svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
+set.seed(20)
+test.box.svm = mran.test
+svm.model = vector(mode='list', length=14)
+tot=rep(NA, 14)
+
+for (i in 1:14){ 
+  this.train = mran.train[,c(3, (i+3):17, (i+18):32, 33:35)]
+  svm.model[[i]]=svm(ROH_0~., this.train)
+  tot[i]=svm.model[[i]]$tot.nSV
+  this.test = mran.test[,c(3, (i+3):17, (i+18):32, 33:35)]
+  test.box.svm[,i+3] = predict(svm.model[[i]], newdata=this.test)
+}
+test.box.svm=test.box.svm[,3:17]
+
+e4svm.err.g = materr(test.box.svm)
+@
+
+<<e4_plot, echo=FALSE, message=FALSE, warning=FALSE>>= 
+e4_ME_ALL = cbind(apk = t(e4apk.err.g)[-1,1], mpk=t(e4mpk.err.g)[-1,1], 
+              reg = t(e4reg.err.g) [-1,1], nn = t(e4nn.err.g)[-1,1],knn = t(e4knn.err.g) [-1,1],
+              wknn = t(e4wknn.err.g)[-1,1], dtree = t(e4dtree.err.g) [-1,1], 
+              rf = t(e4rf.err.g)[-1,1], svm = t(e4svm.err.g)[-1,1]) %>% 
+  as.data.frame()
+
+#rownames(e4_ME_ALL) = 1:14
+colnames(e4_ME_ALL) = c('apk','mpk','reg','nn','knn','wknn','dtree','rf','svm')
+#as.data.frame(importance(rrff, type=2))
+kable(e4_SD_ALL[15,], 'latex', caption = 'E4: Overall performances of models', booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+e4_ME_ALL[15,] = colMeans(e4_ME_ALL, na.rm = T)
+
+ggplot(melt(as.matrix(e4_ME_ALL), varnames=c('DBA', 'Model')), 
+       aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model,linetype=Model), size=0.5)+
+  geom_point(aes(color=Model, shape=Model), size=2)+
+  scale_linetype_manual('', values=c('solid', 'solid', 'dotted',
+                                     'dotted', 'dotted', 'dotted',
+                                     'solid', 'solid', 'solid'))+
+  scale_shape_manual('', values=c(0,1,5,4,0,1,2,5,4)) + 
+  scale_color_manual('', values = c('#999999', '#999999', #pickup- red
+                                '#000000', '#000000', #reg+nn: blue
+                                '#999999', '#999999', #KNN: yellow
+                                '#000000','#000000', #Tree: green
+                                '#000000')) + #SVM: 
+  xlab('DBA') + ylab('Mean Error')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+
+
+e4_MAE_ALL = cbind(apk = t(e4apk.err.g)[-1,3], mpk=t(e4mpk.err.g)[-1,3], 
+              reg = t(e4reg.err.g) [-1,3], nn = t(e4nn.err.g)[-1,3],knn = t(e4knn.err.g) [-1,3],
+              wknn = t(e4wknn.err.g)[-1,3], dtree = t(e4dtree.err.g) [-1,3], 
+              rf = t(e4rf.err.g)[-1,3], svm = t(e4svm.err.g)[-1,3]) %>% 
+  as.data.frame()
+
+#rownames(e4_MAE_ALL) = 1:14
+colnames(e4_MAE_ALL) = c('apk','mpk','reg','nn','knn','wknn','dtree','rf','svm')
+e4_MAE_ALL[15,] = colMeans(e4_MAE_ALL, na.rm = T)
+
+e4_SD_ALL =  cbind(apk = t(e4apk.err.g)[-1,5], mpk=t(e4mpk.err.g)[-1,5], 
+              reg = t(e4reg.err.g) [-1,5], nn = t(e4nn.err.g)[-1,5],
+              knn = t(e4knn.err.g) [-1,5],
+              wknn = t(e4wknn.err.g)[-1,5], dtree = t(e4dtree.err.g) [-1,5], 
+              rf = t(e4rf.err.g)[-1,5], svm = t(e4svm.err.g)[-1,5]) %>% 
+  as.data.frame()
+#rownames(e4_SD_ALL) = 1:14
+colnames(e4_SD_ALL) = c('apk','mpk','reg','nn','knn','wknn','dtree','rf','svm')
+e4_SD_ALL[15,] = colMeans(e4_SD_ALL, na.rm = T)
+@
+
+
+\appendix
+
+<<biber, eval= TRUE, include= FALSE, cache= FALSE, echo= FALSE>>=
+system (paste ("biber", sub ("\\.Rnw$", "", current_input())))
+@
+
+\printbibliography
+
+\end{document}
