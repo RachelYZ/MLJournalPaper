@@ -22,7 +22,9 @@ library(e1071)
 library(forecast)
 library(neuralnet)
 library(kknn)
+library(dummies)
 options(digits = 3)
+setwd("~/Documents/Research/MLJournalPaper/Data")
 ```
 
 ```{r functions}
@@ -160,28 +162,32 @@ reg.err = t(materr(reg.pred[,-2])) %>% data.frame()
 
 ### Neural Network
 ```{r}
-set.seed(2020)
-nn.train.scaled=scale(train) #standardization
-nn.test.scaled= scale(test) 
+set.seed(0)
+nn.train.scaled=scale(train[,-2]) #standardization
+nn.test.scaled= scale(test[,-2]) 
+dow.tr = dummy(train$DOW, sep='.')
+dow.te = dummy(test$DOW, sep='.')
+nn.train.scaled = cbind(dow.tr, nn.train.scaled)
+nn.test.scaled = cbind(dow.te, nn.test.scaled)
 nn.pred = nn.test.scaled %>% data.frame()
-nn.pred[,2:ncol(nn.pred)] = NA
+nn.pred[, 9:ncol(nn.pred)] = NA
 
 s1=Sys.time()
 for (i in rev(agg)){
   colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
-  this.train = nn.train.scaled[, c(1, colind:ncol(nn.train.scaled))]
-  nn.model = neuralnet(ROH0~., this.train, linear.output=T, 
-                       hidden=3, stepmax = 1000000)
-  this.test = nn.test.scaled[, colind:ncol(nn.test.scaled)] %>% as.data.frame()
+  hidden = round((14-match(i, agg)+6)*2/3, 0) #see literature review
+  this.train = nn.train.scaled[, c(1:8, colind:ncol(nn.train.scaled))]
+  nn.model = neuralnet(ROH0~., this.train, linear.output=T, hidden=hidden)
+  this.test = nn.test.scaled[, c(1:8, colind:ncol(nn.test.scaled))] %>% as.data.frame()
   nn.pred[, colind] = predict(nn.model, this.test) 
 }
 time.nn = Sys.time() - s1
-write_csv(nn.pred, 'nn.pre.unscaled_04292020.csv')
 
+nn.pred = nn.pred[, -(1:7)]
 nn.pred.unscaled = nn.pred
 nn.pred.unscaled[,] = NA
 for (i in 1:nrow(nn.pred)){
-  nn.pred.unscaled[i,] = nn.pred[i,]* (apply(test, 2, sd)) + (colMeans(test))
+  nn.pred.unscaled[i,] = nn.pred[i,]* (apply(test[,-2], 2, sd)) + (colMeans(test[,-2]))
 }
 nn.err = materr(nn.pred.unscaled) %>% t() %>% 
   as.data.frame() 
@@ -190,21 +196,23 @@ nn.err = materr(nn.pred.unscaled) %>% t() %>%
 
 ### K-Nearest Neighbor
 ```{r knn}
-set.seed(2020)
-knn.pre = test
+set.seed(0)
+k.train = cbind(dow.tr, train[,-2])
+k.test = cbind(dow.te, test[,-2]) 
+knn.pre = test[,-2]
 knn.pre[,2:ncol(knn.pre)]=NA
-opk= test[1,]
-
-s1 = Sys.time()
+opk= rep(NA, length(agg))
+s1=Sys.time()
 for (i in agg){
-  colind = which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, colind:ncol(train))]
-  train.control = trainControl(method='repeatedcv', number=10) 
-  k = train(ROH0~., method='knn', tuneLength = 10, 
-            trControl=train.control, preProcess=c('scale','center'),
+  colind = which(names(k.train)==paste0('ROH',i))
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) #for PCA
+  k = train(ROH0~., method='knn', tuneLength = 5, 
+            trControl=train.control, preProcess=c('scale','center','pca'),
             data=this.train)
-  opk[, colind] = k$bestTune[[1]]
-  knn.pre[,colind] = predict(k, test)
+  opk[colind-8] = k$bestTune[[1]]
+  this.test = k.test
+  knn.pre[,colind-7] = predict(k, this.test)
 }
 time.knn = Sys.time() - s1
 knn.err = materr(knn.pre) %>% t() %>% 
@@ -212,19 +220,23 @@ knn.err = materr(knn.pre) %>% t() %>%
 ```
 
 ```{r wknn}
-set.seed(2020)
-wknn.pre = test
+set.seed(0) 
+wknn.pre = test[,-2]
 wknn.pre[, 2:ncol(wknn.pre)] = NA 
-opk.wknn = test[1,]
-s1 = Sys.time()
+opk2 = rep(NA, ncol(test)) 
+s1=Sys.time()
 for (i in agg){
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[,c(1,colind:ncol(train))]
-  train.control = trainControl(method='repeatedcv', number=10) 
-  wk = train.kknn(ROH0~., data = this.train, kmax = 10, 
+  # 2s per loop
+  colind = which(names(k.train)==paste0('ROH',i))
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) 
+  wk = train.kknn(ROH0~., data = this.train, kmax = 20, 
                   kernel =  c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
-  opk.wknn[colind] = wk$best.parameters[[2]]
-  wknn.pre[, colind] = predict(wk, test)
+  opk2[colind-8] = wk$best.parameters[[2]]
+#  kknn <- kknn(ROH0~., k=opk2[i-1], scale = ROH0, distance=2, 
+#               train = this.train, test = this.test,
+#               kernel = paste0(toString(wk$best.parameters[[1]])))
+  wknn.pre[, colind-7] = predict(wk, k.test)
 }
 time.wknn = Sys.time() - s1
 wknn.err = materr(wknn.pre)%>% t() %>% 
@@ -233,62 +245,63 @@ wknn.err = materr(wknn.pre)%>% t() %>%
 
 ### Tree
 ```{r decision_tree} 
-set.seed(2020)
+set.seed(0)
 dtree.pred = test
-dtree.pred[,2:ncol(dtree.pred)] = NA
+dtree.pred[, 3:ncol(dtree.pred)] = NA
 s1 = Sys.time()
 for (i in agg){   
   colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, colind:ncol(train))]
+  this.train = train[, c(1, 2, colind:ncol(train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
   dtree.pred[, colind] = predict(tree.model, test)
 }
 time.dtree = Sys.time() - s1
-dtree.err = materr(dtree.pred) %>% t() %>% 
+dtree.err = materr(dtree.pred[,-2]) %>% t() %>% 
   as.data.frame() 
 ```
  
 ```{r rf}
-set.seed(2020)
-rf.pred = test
-rf.pred[, 2:ncol(test)] = NA
-
-mtry.rf = rep(0, length(agg)+1)
-s1 = Sys.time()
-for (i in agg){
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, colind:ncol(train))] 
-  train.control=trainControl(method='repeatedcv', number=10)
-  r.tree = train(ROH0~., data = this.train, method='rf', 
-               trControl=train.control, metric = 'RMSE')
-  mtry.rf[colind] = r.tree$bestTune
-  rf.pred[, colind] = predict(r.tree, test, type = 'raw')
-}
-time.rf = Sys.time() - s1 
-
-write_csv(rf.pred, 'rf0429.csv')
-rf.err = materr(rf.pred)%>% t() %>% 
+set.seed(0)
+# rf.pred = test
+# rf.pred[, 2:ncol(test)] = NA
+# 
+# mtry.rf = rep(0, length(agg)+1)
+# s1 = Sys.time()
+# for (i in agg){
+#   colind=which(names(train)==paste0('ROH',i))
+#   this.train = train[, c(1, colind:ncol(train))] 
+#   train.control=trainControl(method='repeatedcv', number=10)
+#   r.tree = train(ROH0~., data = this.train, method='rf', 
+#                trControl=train.control, metric = 'RMSE')
+#   mtry.rf[colind] = r.tree$bestTune
+#   rf.pred[, colind] = predict(r.tree, test, type = 'raw')
+# }
+# time.rf = Sys.time() - s1 
+# 
+# write_csv(rf.pred, 'rfpred_wd_0512.csv')
+rf.pred <- read.csv("rf_wd_pred_new_0512.csv")
+rf.err = materr(rf.pred[,-2])%>% t() %>% 
   as.data.frame() 
 ```
 
 ### Support Vector Machine 
 ```{r svm}
-set.seed(2020)
+set.seed(0)
 svm.pred = test   
-svm.pred[, 2:ncol(svm.pred)] = NA
-support_vector_number = rep(NA, length(agg)+1) 
-svm.list = vector(mode='list')
-s1=Sys.time()
+svm.pred[, 3:ncol(svm.pred)] = NA
+totot = rep(0, 90)
 for (i in agg){
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, colind:ncol(train))]
-  svm.model = svm(ROH0~., data=this.train)
-  support_vector_number[colind] = svm.model$tot.nSV
+  colind = which(names(train)==paste0('ROH',i))
+  # colind = which(names(k.train)==paste0('ROH',i))
+  this.train = train[, c(1:2, colind:ncol(train))]
+  # this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  svm.model = svm(ROH0~., this.train)
+  totot[i]=svm.model$tot.nSV
   svm.pred[, colind] = predict(svm.model, test)
-#  print(Sys.time()-s1)
 }
-time.svm = Sys.time() - s1
-svm.err = materr(svm.pred) %>% t() %>% as.data.frame() 
+
+svm.err = materr(svm.pred[,-2]) %>% t() %>% 
+  as.data.frame()
 ```
 
 
