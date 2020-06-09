@@ -73,21 +73,25 @@ foo = function(x){
   return (new)
 }
 dt$Arrival.Date = foo(dt$Arrival.Date)
-
-agg = c(1, 2, 3, 4, 5, 6, 7, 14, 21, 30, 60, 90)
 wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>% 
   data.frame() %>%
   arrange(., Arrival.Date)
-wide = wide %>%
-  mutate(DOW = weekdays(Arrival.Date)) %>%
-  remove_rownames %>% column_to_rownames('Arrival.Date') %>%
-  select(X0, DOW, paste0("X",agg)) 
-colnames(wide) = c('ROH0', 'DOW', paste0('ROH',agg))
+
+for (i in (ncol(wide)-1):2){
+  wide[i] = wide[i] + wide[i+1] 
+}
+wide[,3] = as.factor(weekdays(wide$Arrival.Date))
+colnames(wide) = c('Arrival.Date', 'ROH0', 'DOW', paste0('ROH', 1:(ncol(wide)-3)))
+
 wide$DOW <- ordered(wide$DOW, levels=c("Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+wide = wide %>%
+  remove_rownames %>% column_to_rownames('Arrival.Date')
 
 kable(wide[1:10, 1:10], 'latex', caption = 'Experiment 1: Data Overview',
         longtable = F, booktabs = T) %>%
   kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
+
 
 ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH0)) +  
   geom_line() +
@@ -119,12 +123,14 @@ materr = function(data){
 
 set.seed(0) 
 tr_ind = sample(nrow(wide), 0.8*nrow(wide))
-train = wide[tr_ind, ]
-test = wide[-tr_ind, ]
+agg = c(1,2,3,4,5,6,7,14,21,30,60,90)
+ran.train = wide[tr_ind, c(1,2,agg+2)]
+nrow(ran.test)
+ran.test = wide[-tr_ind, c(1,2,agg+2)]
 @
 
 <<ran.apk, echo=FALSE, message=FALSE, warning=FALSE>>=  
-ran.apk.wd = train    
+ran.apk.wd = ran.train    
 for (j in ncol(ran.apk.wd):3){
   ran.apk.wd[,j] = ran.apk.wd[,1] - ran.apk.wd[,j]
 }
@@ -133,33 +139,34 @@ ran.apk.wd = ran.apk.wd %>%
   group_by(DOW) %>%
   summarise_at(.vars=names(.)[3:ncol(ran.apk.wd)], .funs='mean')
 
-ran.apk.wd.pre = test
+ran.apk.wd.pre = ran.test
 ran.apk.wd.pre[, 3:ncol(ran.apk.wd.pre)] = NA
 
 for (i in 1:(nrow(ran.apk.wd.pre))){
   m = match(ran.apk.wd.pre[i,2], ran.apk.wd$DOW)
   ran.apk.wd.pre[i,3:ncol(ran.apk.wd.pre)] = 
-    test[i,3:ncol(ran.apk.wd.pre)] + ran.apk.wd[m, 2:ncol(ran.apk.wd)]
+    ran.test[i,3:ncol(ran.apk.wd.pre)] + ran.apk.wd[m, 2:ncol(ran.apk.wd)]
 }
+
 ran.apk.wd.err = t(materr(ran.apk.wd.pre[,-2])) %>% data.frame() 
 @
 
 <<ran.mpk, echo=FALSE, message=FALSE, warning=FALSE>>=  
-ran.mpk.wd = train 
+ran.mpk.wd = ran.train 
 for (j in ncol(ran.mpk.wd):3){
   ran.mpk.wd[,j] =  ran.mpk.wd[,j]  / ran.mpk.wd[,1]
 }
 ran.mpk.wd = ran.mpk.wd %>%
   group_by(DOW) %>%
- summarise_at(.vars=names(.)[3:(ncol(train))], .funs='mean')
+ summarise_at(.vars=names(.)[3:(ncol(ran.train))], .funs='mean')
 
-ran.mpk.wd.pre = test
+ran.mpk.wd.pre = ran.test
 ran.mpk.wd.pre[, 3:ncol(ran.mpk.wd.pre)] = NA
 
 for (i in 1:(nrow(ran.mpk.wd.pre))){
   m = match(ran.mpk.wd.pre[i,2], ran.mpk.wd$DOW)
   ran.mpk.wd.pre[i, 3:ncol(ran.mpk.wd.pre)] = 
-    test[i, 3:ncol(ran.mpk.wd.pre)]/
+    ran.test[i, 3:ncol(ran.mpk.wd.pre)]/
     ran.mpk.wd[m, 2:ncol(ran.mpk.wd)]} 
 #NA because the dinominator=0
 
@@ -168,14 +175,14 @@ ran.mpk.wd.err = materr(ran.mpk.wd.pre[,-2]) %>% t() %>%
 @
 
 <<ran.reg, echo=FALSE, message=FALSE, warning=FALSE>>= 
-ran.reg.pred1 = test
+ran.reg.pred1 = ran.test
 ran.reg.pred1[,3:ncol(ran.reg.pred1)] = NA
 reg = vector(mode='list', length=90)
 for (i in agg){ 
   these.predictor = paste0(paste0('ROH',agg[which(agg==i)]), collapse='+')
   lm.formula = paste('ROH0', these.predictor, sep = '~')
-  reg[[i]] = lm(lm.formula, data = train)
-  ran.reg.pred1[, which(names(ran.reg.pred1)==paste0('ROH',i))]=predict(reg[[i]], test)
+  reg[[i]] = lm(lm.formula, data = ran.train)
+  ran.reg.pred1[, which(names(ran.reg.pred1)==paste0('ROH',i))]=predict(reg[[i]], ran.test)
 }
 reg = na.omit(reg)
 
@@ -184,11 +191,11 @@ ran.reg.err = materr(ran.reg.pred1[,-2]) %>% t() %>%
 @
 
 <<ran.nn, echo=FALSE, message=FALSE, warning=FALSE>>=  
-nn.train=scale(train[,-2])
+nn.train=scale(ran.train[,-2])
 scale.list.e2 = attributes(nn.train)
 nn.train.scaled=cbind(nn.train, dow.tr)
 
-nn.test=test[,-2]
+nn.test=ran.test[,-2]
 nn.test.scaled = scale(nn.test, scale = scale.list.e2$`scaled:scale`, 
                        center=scale.list.e2$`scaled:center`)
 nn.test.scaled=cbind(nn.test.scaled, dow.te)
@@ -209,7 +216,7 @@ for (i in agg){
 
 ran.nn.pre.us = ran.nn.pred*(scale.list.e2$`scaled:scale`)+
   scale.list.e2$`scaled:center`
-ran.nn.pre.us[,1] = test$ROH0
+ran.nn.pre.us[,1] = ran.test$ROH0
 ran.nn.err = materr(ran.nn.pre.us) %>% t() %>% 
   as.data.frame() 
 @
@@ -217,14 +224,14 @@ ran.nn.err = materr(ran.nn.pre.us) %>% t() %>%
 <<ran.knn, echo=FALSE, message=FALSE, warning=FALSE>>=
 #12:08 ready to run - 1:19 start to run - FINISHED!
 set.seed(0) 
-train.true = train[,1] 
-dow.tr = dummy(train$DOW, sep='.') 
-dow.te = dummy(test$DOW, sep='.')
-k.train = cbind(train[, -c(2, nearZeroVar(train))], dow.tr) 
-k.test = cbind(test, dow.te)[,-2]
+train.true = ran.train[,1] 
+dow.tr = dummy(ran.train$DOW, sep='.') 
+dow.te = dummy(ran.test$DOW, sep='.')
+k.train = cbind(ran.train[, -c(2, nearZeroVar(ran.train))], dow.tr) 
+k.test = cbind(ran.test, dow.te)[,-2]
 ran.knn.pre = k.test
 ran.knn.pre[,2:ncol(ran.knn.pre)]=NA
-opk= test[1,]
+opk= ran.test[1,]
 
 for (i in agg){
   #each loop takes 1min
@@ -273,14 +280,14 @@ ran.wknn.err = materr(ran.wknn.pre)%>% t() %>%
 @
 
 <<ran.dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
-ran.dtree.pred = test
+ran.dtree.pred = ran.test
 ran.dtree.pred[,3:ncol(ran.dtree.pred)] = NA
 
 for (i in agg){ 
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, colind:ncol(train))]
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(ran.train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
-  this.test = test
+  this.test = ran.test
   ran.dtree.pred[, colind] = predict(tree.model, this.test)
 }
 
@@ -290,48 +297,46 @@ ran.dtree.err = materr(ran.dtree.pred[,-2]) %>% t() %>%
 
 <<ran.rtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
 set.seed(0)  
-ran.rf.pred = test
-ran.rf.pred[,3:ncol(test)] = NA
+ran.rf.pred = ran.test
+ran.rf.pred[,3:ncol(ran.test)] = NA
 s1 = Sys.time()
-for (i in agg){
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[,c(1,2,colind:ncol(train))]
-  this.test = test
+for (i in agg){ 
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[,c(1,2,colind:ncol(ran.train))]
+  this.test = ran.test
   train.control=trainControl(method='repeatedcv', number=10)
 #  rtt = randomForest(ROH0~., data = this.train)
-  r.tree = train(ROH0~., data = this.train, method='rf',
+  r.tree = train(ROH0~., data = this.train, method='rf',  
                  trControl=train.control, tuneLength = 12)
-                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train))))
-  print(Sys.time()-s1)
+                 #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train)))) 
+  print(Sys.time()-s1) 
   #print(r.tree)
   ran.rf.pred[, colind] = predict(r.tree, this.test, type = 'raw')
 }
-#importance(rtt)
-#varImpPlot(rtt)
-#varImp(r.tree)
-write_csv(ran.rf.pred, 'rf05122020.csv')
-ran.rf.pred=read_csv('rf05122020.csv')
+importance(rtt)
+varImpPlot(rtt)
+varImp(r.tree)
+write_csv(ran.rf.pred, 'rf05112020.csv')
+ran.rf.pred=read_csv('rf0722.csv')
 ran.rf.err = materr(ran.rf.pred[,-2])%>% t() %>% 
   as.data.frame() 
 @
 
 <<ran.svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
-set.seed(0)
-ran.svm.pred = test   
+ran.svm.pred = ran.test   
 ran.svm.pred[,3:ncol(ran.svm.pred)] = NA
 totot = rep(0, 90)
 for (i in agg){
-  colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, 2, colind:ncol(train))]
+  colind=which(names(ran.train)==paste0('ROH',i))
+  this.train = ran.train[, c(1, colind:ncol(this.train))]
   svm.model = svm(ROH0~., this.train)
   totot[i]=svm.model$tot.nSV
- # this.test = test
-  ran.svm.pred[, colind] = predict(svm.model, test)
+  this.test = ran.test
+  ran.svm.pred[, colind] = predict(svm.model, this.test)
 }
 
 ran.svm.err = materr(ran.svm.pred[,-2]) %>% t() %>% 
   as.data.frame()
-colMeans(ran.svm.err)
 @
 
 <<ran.results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
@@ -436,6 +441,7 @@ kable(e2_MAE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
   kable_styling(latex_options = c("striped", "repeat_header"))
 
 @
+
 
 
 \appendix

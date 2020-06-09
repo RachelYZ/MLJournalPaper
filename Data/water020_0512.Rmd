@@ -8,7 +8,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
 library(kableExtra)
 library(tidyverse)
 library(dplyr)
@@ -27,7 +27,7 @@ options(digits = 3)
 setwd("~/Documents/Research/MLJournalPaper/Data")
 ```
 
-```{r functions}
+```{r functions, include=FALSE}
 convert_date = function(x){ #to convert date
   require(dplyr)
   new = as.Date(x, '%y.%m.%d') %>%
@@ -84,15 +84,11 @@ wide = wide %>%
 colnames(wide) = c('ROH0', 'DOW', paste0('ROH',agg))
 wide$DOW <- ordered(wide$DOW, levels=c("Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
 
-# kable(wide[1:10, 1:10], 'latex', caption = 'Data Overview',
-#         longtable = F, booktabs = T) %>%
-#   kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
-# 
-# ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH0)) +  
-#   geom_line() +
-#   theme_minimal()+
-#   xlab("Stay Date") + ylab('Final Arrivals') + 
-#   theme(plot.caption = element_text(hjust = 0))
+ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH0)) +
+  geom_line(color='blue') +
+  theme_minimal()+
+  xlab("Stay Date") + ylab('Final Arrivals') +
+  theme(plot.caption = element_text(hjust = 0))
 ```
 
 ```{r cv}
@@ -100,6 +96,10 @@ set.seed(0)
 tr_ind = sample(nrow(wide), 0.8*nrow(wide))
 train = wide[tr_ind, ]
 test = wide[-tr_ind, ]
+
+kable(train[1:10, ], 'latex', caption = 'Training Set Overview',
+        longtable = F, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
 ```
 
 ## Modeling
@@ -117,10 +117,12 @@ apk = apk %>%
 apk.pre = test
 apk.pre[, 3:ncol(apk.pre)] = NA
 
+s1 = Sys.time()
 for (i in 1:(nrow(apk.pre))){
   m = match(apk.pre[i,2], apk$DOW)
   apk.pre[i, 3:ncol(apk.pre)] = test[i,3:ncol(apk.pre)] + apk[m,2:ncol(apk)]
 }
+time.apk = Sys.time() - s1
 apk.err = t(materr(apk.pre[,-2])) %>% data.frame()  
 ```
 
@@ -137,11 +139,13 @@ mpk = mpk %>%
 mpk.pre = test
 mpk.pre[, 3:ncol(mpk.pre)] = NA
 
+s1 = Sys.time()
 for (i in 1:(nrow(mpk.pre))){
   m = match(mpk.pre[i,2], mpk$DOW)
   mpk.pre[i,3:ncol(mpk.pre)] = 
     test[i,3:ncol(mpk.pre)] / mpk[m, 2:ncol(mpk)]
 }
+time.mpk = Sys.time() - s1
 
 mpk.err = t(materr(mpk.pre[,-2])) %>% data.frame() 
 ```
@@ -151,17 +155,20 @@ mpk.err = t(materr(mpk.pre[,-2])) %>% data.frame()
 reg.pred = test
 reg.pred[,3:ncol(reg.pred)] = NA
 reg = vector(mode='list')
+s1 = Sys.time()
 for (i in agg){ 
   this.predictor = paste0(paste0('ROH',agg[which(agg==i)]), collapse='+')
   lm.formula = paste('ROH0', paste0('DOW+', this.predictor), sep = '~')
   reg[[this.predictor]] = lm(lm.formula, data = train)
   reg.pred[, which(names(reg.pred)==paste0('ROH',i))]=predict(reg[[this.predictor]], test)
 }
+time.reg = Sys.time() - s1
 reg.err = t(materr(reg.pred[,-2])) %>% data.frame() 
 ```
 
 ### Neural Network
-```{r}
+
+```{r nn}
 set.seed(0)
 nn.train.scaled=scale(train[,-2]) #standardization
 nn.test.scaled= scale(test[,-2]) 
@@ -171,14 +178,22 @@ nn.train.scaled = cbind(dow.tr, nn.train.scaled)
 nn.test.scaled = cbind(dow.te, nn.test.scaled)
 nn.pred = nn.test.scaled %>% data.frame()
 nn.pred[, 9:ncol(nn.pred)] = NA
-
+nn.err = read.csv('nn.err.csv')
+```
+ 
+```{r eval = FALSE}
 s1=Sys.time()
-for (i in rev(agg)){
+for (i in (agg)){
+#  print('started')
   colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
-  hidden = round((14-match(i, agg)+6)*2/3, 0) #see literature review
   this.train = nn.train.scaled[, c(1:8, colind:ncol(nn.train.scaled))]
-  nn.model = neuralnet(ROH0~., this.train, linear.output=T, hidden=hidden)
+  hidden = round(ncol(this.train)*2/3, 0)
+#  print('scaled')
+  nn.model = neuralnet(ROH0~., this.train, linear.output=T, 
+                       hidden=hidden, stepmax = 100000)
+#  print(paste0(i, 'modeled'))
   this.test = nn.test.scaled[, c(1:8, colind:ncol(nn.test.scaled))] %>% as.data.frame()
+#  print(paste0(i, 'forecasted'))
   nn.pred[, colind] = predict(nn.model, this.test) 
 }
 time.nn = Sys.time() - s1
@@ -260,26 +275,28 @@ dtree.err = materr(dtree.pred[,-2]) %>% t() %>%
   as.data.frame() 
 ```
  
-```{r rf}
+```{r rf, eval=FALSE}
 set.seed(0)
-# rf.pred = test
-# rf.pred[, 2:ncol(test)] = NA
-# 
-# mtry.rf = rep(0, length(agg)+1)
-# s1 = Sys.time()
-# for (i in agg){
-#   colind=which(names(train)==paste0('ROH',i))
-#   this.train = train[, c(1, colind:ncol(train))] 
-#   train.control=trainControl(method='repeatedcv', number=10)
-#   r.tree = train(ROH0~., data = this.train, method='rf', 
-#                trControl=train.control, metric = 'RMSE')
-#   mtry.rf[colind] = r.tree$bestTune
-#   rf.pred[, colind] = predict(r.tree, test, type = 'raw')
-# }
-# time.rf = Sys.time() - s1 
-# 
-# write_csv(rf.pred, 'rfpred_wd_0512.csv')
-rf.pred <- read.csv("rf_wd_pred_new_0512.csv")
+rf.pred = test
+rf.pred[, 3:ncol(test)] = NA
+ 
+mtry.rf = rep(0, length(agg)+1)
+s1 = Sys.time()
+for (i in agg){
+  colind=which(names(train)==paste0('ROH',i))
+  this.train = train[, c(1, 2, colind:ncol(train))]
+  train.control=trainControl(method='repeatedcv', number=10)
+  r.tree = train(ROH0~., data = this.train, method='rf',
+               trControl=train.control, metric = 'RMSE')
+  mtry.rf[colind-2] = r.tree$bestTune
+  rf.pred[, colind] = predict(r.tree, test, type = 'raw')
+}
+time.rf = Sys.time() - s1
+```
+
+```{r rfresults}
+#write_csv(rf.pred, 'rfpred_wd_0515.csv')
+rf.pred <- read.csv("rfpred_wd_0515.csv")
 rf.err = materr(rf.pred[,-2])%>% t() %>% 
   as.data.frame() 
 ```
@@ -289,17 +306,15 @@ rf.err = materr(rf.pred[,-2])%>% t() %>%
 set.seed(0)
 svm.pred = test   
 svm.pred[, 3:ncol(svm.pred)] = NA
-totot = rep(0, 90)
+totot = rep(0, length(agg))
+
 for (i in agg){
-  colind = which(names(train)==paste0('ROH',i))
-  # colind = which(names(k.train)==paste0('ROH',i))
-  this.train = train[, c(1:2, colind:ncol(train))]
-  # this.train = k.train[, c(1:8, colind:ncol(k.train))]
+  colind=which(names(train)==paste0('ROH',i))
+  this.train = train[, c(1, 2, colind:ncol(train))]
   svm.model = svm(ROH0~., this.train)
-  totot[i]=svm.model$tot.nSV
+  totot[colind-2]=svm.model$tot.nSV
   svm.pred[, colind] = predict(svm.model, test)
 }
-
 svm.err = materr(svm.pred[,-2]) %>% t() %>% 
   as.data.frame()
 ```
@@ -330,7 +345,7 @@ ggplot(MEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
   theme(axis.text.x = element_text(angle=45, vjust=0.5))
 
 ME_ALL[13,] = colMeans(ME_ALL)
-kable(ME_ALL[13,], 'latex', caption = 'Mean Errors',
+kable(ME_ALL[13, ], 'latex', caption = 'Mean Errors',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
 ```
@@ -357,7 +372,7 @@ ggplot(MAEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
   theme(axis.text.x = element_text(angle=45, vjust=0.5))
 
 MAE_ALL[13,] = colMeans(MAE_ALL)
-kable(MAE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+kable(MAE_ALL[13,], 'latex', caption = 'Mean Absolute Errors',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
 ```
@@ -368,32 +383,23 @@ SDE_ALL = cbind(apk = apk.err[-1,5], mpk=mpk.err[-1,5],
               wknn = wknn.err[-1,5], dtree = dtree.err[-1,5],  
               rf = rf.err[-1,5], svm = svm.err[-1,5] ) %>%
   as.data.frame() 
-SDE_ALL[nrow(SDE_ALL)+1, ] = colMeans(SDE_ALL)
-rownames(SDE_ALL)=c(rownames(apk.err)[-1], 'mean')
+rownames(SDE_ALL) = c(paste0('DBA',agg))
 
 SDEmelt = melt(as.matrix(SDE_ALL), varnames=c('DBA', 'Model'))
 SDEmelt$DBA = factor(SDEmelt$DBA, 
-              levels = c('ROH1','ROH2','ROH3','ROH4','ROH5','ROH6','ROH7','ROH14',
-                         'ROH21','ROH30','ROH60','ROH90'))
-SDEmelt$Model = factor(SDEmelt$Model, levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
-ggplot(SDEmelt, 
-       aes(x=DBA, y=value, group=Model)) +
-  geom_line(aes(color=Model,linetype=Model), size=0.5)+
-  geom_point(aes(color=Model, shape=Model), size=1.8)+
-  scale_linetype_manual('', values=c('solid', 'solid', 'dotted',
-                                     'dotted', 'dotted', 'dotted',
-                                     'solid', 'solid', 'solid'))+
-  scale_shape_manual('', values=c(0,1,5,4,0,1,2,5,4)) + 
-  scale_color_manual('', values = c('#999999', '#999999', #pickup- red
-                                '#000000', '#000000', #reg+nn: blue
-                                '#999999', '#999999', #KNN: yellow
-                                '#000000','#000000', #Tree: green
-                                '#000000')) + #SVM: 
-  xlab('DBA') + ylab('Standard Deviation of Errors') +
-  theme_minimal()+
+              levels = c(paste0('DBA', agg)))
+SDEmelt$Model = factor(SDEmelt$Model, 
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+ggplot(SDEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_brewer(palette="Paired")+
+  xlab('') + ylab('Standard Deviations') +
+  theme_minimal()+ ylim(0,15)+
   theme(axis.text.x = element_text(angle=45, vjust=0.5))
+
 SDE_ALL[13,] = colMeans(SDE_ALL)
-kable(SDE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+kable(SDE_ALL[13,], 'latex', caption = 'Standard Deviation Errors',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
 #write.csv(cbind(MEALL, MAEALL, MPEALL, MAPEALL, SD), "ran_e1_bycutoff.csv")
@@ -421,7 +427,7 @@ ggplot(MPEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
   theme(axis.text.x = element_text(angle=45, vjust=0.5))
 
 MPE_ALL[13,] = colMeans(MPE_ALL)
-kable(MPE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+kable(MPE_ALL[13,], 'latex', caption = 'Mean Percentage Errors',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
 ```
@@ -448,7 +454,7 @@ ggplot(MAPEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
   theme(axis.text.x = element_text(angle=45, vjust=0.5))
 
 MAPE_ALL[13,] = colMeans(MAPE_ALL)
-kable(MAPE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
+kable(MAPE_ALL[13,], row.names = NA, 'latex', caption = 'MAPE',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
 ```

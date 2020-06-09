@@ -78,6 +78,11 @@ agg = c(1, 2, 3, 4, 5, 6, 7, 14, 21, 30, 60, 90)
 wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>% 
   data.frame() %>%
   arrange(., Arrival.Date)
+
+for (i in (ncol(wide)-1):2){
+  wide[i] = wide[i] + wide[i+1] 
+}
+
 wide = wide %>%
   mutate(DOW = weekdays(Arrival.Date)) %>%
   remove_rownames %>% column_to_rownames('Arrival.Date') %>%
@@ -96,7 +101,7 @@ ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH0)) +
   theme(plot.caption = element_text(hjust = 0))
 @
 
-<<e2.ran.cv, echo=FALSE, message=FALSE, warning=FALSE>>=
+<<e2.cv, echo=FALSE, message=FALSE, warning=FALSE>>=
 materr = function(data){ 
   require(dplyr)
   m = data 
@@ -121,69 +126,69 @@ set.seed(0)
 tr_ind = sample(nrow(wide), 0.8*nrow(wide))
 train = wide[tr_ind, ]
 test = wide[-tr_ind, ]
+
 @
 
-<<ran.apk, echo=FALSE, message=FALSE, warning=FALSE>>=  
-ran.apk.wd = train    
-for (j in ncol(ran.apk.wd):3){
-  ran.apk.wd[,j] = ran.apk.wd[,1] - ran.apk.wd[,j]
+<<apk, echo=FALSE, message=FALSE, warning=FALSE>>=  
+apk.wd = train    
+for (j in ncol(apk.wd):3){
+  apk.wd[,j] = apk.wd[,1] - apk.wd[,j]
 }
 
-ran.apk.wd = ran.apk.wd %>%
+apk.wd = apk.wd %>%
   group_by(DOW) %>%
-  summarise_at(.vars=names(.)[3:ncol(ran.apk.wd)], .funs='mean')
+  summarise_at(.vars=names(.)[3:ncol(apk.wd)], .funs='mean')
 
-ran.apk.wd.pre = test
-ran.apk.wd.pre[, 3:ncol(ran.apk.wd.pre)] = NA
+apk.wd.pre = test
+apk.wd.pre[, 3:ncol(apk.wd.pre)] = NA
 
-for (i in 1:(nrow(ran.apk.wd.pre))){
-  m = match(ran.apk.wd.pre[i,2], ran.apk.wd$DOW)
-  ran.apk.wd.pre[i,3:ncol(ran.apk.wd.pre)] = 
-    test[i,3:ncol(ran.apk.wd.pre)] + ran.apk.wd[m, 2:ncol(ran.apk.wd)]
+for (i in 1:(nrow(apk.wd.pre))){
+  m = match(apk.wd.pre[i,2], apk.wd$DOW)
+  apk.wd.pre[i,3:ncol(apk.wd.pre)] = 
+    test[i,3:ncol(apk.wd.pre)] + apk.wd[m, 2:ncol(apk.wd)]
 }
-ran.apk.wd.err = t(materr(ran.apk.wd.pre[,-2])) %>% data.frame() 
+apk.wd.err = t(materr(apk.wd.pre[,-2])) %>% data.frame() 
 @
 
-<<ran.mpk, echo=FALSE, message=FALSE, warning=FALSE>>=  
-ran.mpk.wd = train 
-for (j in ncol(ran.mpk.wd):3){
-  ran.mpk.wd[,j] =  ran.mpk.wd[,j]  / ran.mpk.wd[,1]
+<<mpk, echo=FALSE, message=FALSE, warning=FALSE>>=  
+mpk.wd = train 
+for (j in ncol(mpk.wd):3){
+  mpk.wd[,j] =  mpk.wd[,j]  / mpk.wd[,1]
 }
-ran.mpk.wd = ran.mpk.wd %>%
+mpk.wd = mpk.wd %>%
   group_by(DOW) %>%
  summarise_at(.vars=names(.)[3:(ncol(train))], .funs='mean')
 
-ran.mpk.wd.pre = test
-ran.mpk.wd.pre[, 3:ncol(ran.mpk.wd.pre)] = NA
+mpk.wd.pre = test
+mpk.wd.pre[, 3:ncol(mpk.wd.pre)] = NA
 
-for (i in 1:(nrow(ran.mpk.wd.pre))){
-  m = match(ran.mpk.wd.pre[i,2], ran.mpk.wd$DOW)
-  ran.mpk.wd.pre[i, 3:ncol(ran.mpk.wd.pre)] = 
-    test[i, 3:ncol(ran.mpk.wd.pre)]/
-    ran.mpk.wd[m, 2:ncol(ran.mpk.wd)]} 
+for (i in 1:(nrow(mpk.wd.pre))){
+  m = match(mpk.wd.pre[i,2], mpk.wd$DOW)
+  mpk.wd.pre[i, 3:ncol(mpk.wd.pre)] = 
+    test[i, 3:ncol(mpk.wd.pre)]/
+    mpk.wd[m, 2:ncol(mpk.wd)]} 
 #NA because the dinominator=0
 
-ran.mpk.wd.err = materr(ran.mpk.wd.pre[,-2]) %>% t() %>% 
+mpk.wd.err = materr(mpk.wd.pre[,-2]) %>% t() %>% 
   as.data.frame() 
 @
 
-<<ran.reg, echo=FALSE, message=FALSE, warning=FALSE>>= 
-ran.reg.pred1 = test
-ran.reg.pred1[,3:ncol(ran.reg.pred1)] = NA
-reg = vector(mode='list', length=90)
+<<reg, echo=FALSE, message=FALSE, warning=FALSE>>= 
+reg.pred = test
+reg.pred[,3:ncol(reg.pred)] = NA
+reg = vector(mode='list')
+s1 = Sys.time()
 for (i in agg){ 
-  these.predictor = paste0(paste0('ROH',agg[which(agg==i)]), collapse='+')
-  lm.formula = paste('ROH0', these.predictor, sep = '~')
-  reg[[i]] = lm(lm.formula, data = train)
-  ran.reg.pred1[, which(names(ran.reg.pred1)==paste0('ROH',i))]=predict(reg[[i]], test)
+  this.predictor = paste0(paste0('ROH',agg[which(agg==i)]), collapse='+')
+  lm.formula = paste('ROH0', paste0('DOW+', this.predictor), sep = '~')
+  reg[[this.predictor]] = lm(lm.formula, data = train)
+  reg.pred[, which(names(reg.pred)==paste0('ROH',i))]=predict(reg[[this.predictor]], test)
 }
-reg = na.omit(reg)
-
-ran.reg.err = materr(ran.reg.pred1[,-2]) %>% t() %>% 
-  as.data.frame() 
+time.reg = Sys.time() - s1
+reg.err = t(materr(reg.pred[,-2])) %>% data.frame() 
 @
 
-<<ran.nn, echo=FALSE, message=FALSE, warning=FALSE>>=  
+<<nn, echo=FALSE, eval=FALSE, warning=FALSE>>=  
 nn.train=scale(train[,-2])
 scale.list.e2 = attributes(nn.train)
 nn.train.scaled=cbind(nn.train, dow.tr)
@@ -193,28 +198,32 @@ nn.test.scaled = scale(nn.test, scale = scale.list.e2$`scaled:scale`,
                        center=scale.list.e2$`scaled:center`)
 nn.test.scaled=cbind(nn.test.scaled, dow.te)
 
-ran.nn.pred = nn.test
-ran.nn.pred[,2:ncol(ran.nn.pred)] = NA
+nn.pred = nn.test
+nn.pred[,2:ncol(nn.pred)] = NA
 s1=Sys.time()
 for (i in agg){
   colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
   this.train = nn.train.scaled[, c(1, colind:ncol(data.frame(nn.train.scaled)))]
   nn.model = neuralnet(ROH0~., this.train, linear.output = F, hidden=3, stepmax = 1e+06)
   this.test = nn.test.scaled %>% as.data.frame()
-  ran.nn.pred[, colind] = predict(nn.model, this.test)
+  nn.pred[, colind] = predict(nn.model, this.test)
   print(Sys.time()-s1)
 }
-#write_csv(ran.nn.pred, 'e2.ran.nn.pre.csv')
-#ran.nn.pre.scaled <- read.csv("~/e2.ran.nn.pre.csv", header=ROH0)
+#write_csv(nn.pred, 'e2.nn.pre.csv')
+#nn.pre.scaled <- read.csv("~/e2.nn.pre.csv", header=ROH0)
 
-ran.nn.pre.us = ran.nn.pred*(scale.list.e2$`scaled:scale`)+
+nn.pre.us = nn.pred*(scale.list.e2$`scaled:scale`)+
   scale.list.e2$`scaled:center`
-ran.nn.pre.us[,1] = test$ROH0
-ran.nn.err = materr(ran.nn.pre.us) %>% t() %>% 
+nn.pre.us[,1] = test$ROH0
+nn.err = materr(nn.pre.us) %>% t() %>% 
   as.data.frame() 
 @
 
-<<ran.knn, echo=FALSE, message=FALSE, warning=FALSE>>=
+<<nn.results, echo=FALSE, message=FALSE, warning=FALSE>>=
+nn.err = read_csv('nn.err.csv')
+@
+
+<<knn, echo=FALSE, message=FALSE, warning=FALSE>>=
 #12:08 ready to run - 1:19 start to run - FINISHED!
 set.seed(0) 
 train.true = train[,1] 
@@ -222,8 +231,8 @@ dow.tr = dummy(train$DOW, sep='.')
 dow.te = dummy(test$DOW, sep='.')
 k.train = cbind(train[, -c(2, nearZeroVar(train))], dow.tr) 
 k.test = cbind(test, dow.te)[,-2]
-ran.knn.pre = k.test
-ran.knn.pre[,2:ncol(ran.knn.pre)]=NA
+knn.pre = k.test
+knn.pre[,2:ncol(knn.pre)]=NA
 opk= test[1,]
 
 for (i in agg){
@@ -236,20 +245,20 @@ for (i in agg){
             data=this.train)
   opk[, colind] = k$bestTune[[1]]
   this.test = k.test
-  ran.knn.pre[,colind] = predict(k, this.test)
+  knn.pre[,colind] = predict(k, this.test)
 }
-#ran.knn.pre = ran.knn.pre[, 1:13]
-#write_csv(ran.knn.pre, 'ran.knn.pre.csv')
-#ran.knn.pre <- read.csv("~/ran.knn.pre.csv")
+#knn.pre = knn.pre[, 1:13]
+#write_csv(knn.pre, 'knn.pre.csv')
+#knn.pre <- read.csv("~/knn.pre.csv")
 
-ran.knn.err = materr(ran.knn.pre) %>% t() %>% 
+knn.err = materr(knn.pre) %>% t() %>% 
   as.data.frame() 
-ran.knn.err = ran.knn.err[1:13,]
+knn.err = knn.err[1:13,]
 @
 
 <<wknn, echo=FALSE, message=FALSE, warning=FALSE>>= 
-ran.wknn.pre = k.test
-ran.wknn.pre[, 2:ncol(ran.wknn.pre)] = NA 
+wknn.pre = k.test
+wknn.pre[, 2:ncol(wknn.pre)] = NA 
 
 opk2 = rep(NA, ncol(test)) 
 for (i in agg){
@@ -265,33 +274,33 @@ for (i in agg){
 #  kknn <- kknn(ROH0~., k=opk2[i-1], scale = ROH0, distance=2, 
 #               train = this.train, test = this.test,
 #               kernel = paste0(toString(wk$best.parameters[[1]])))
-  ran.wknn.pre[, colind] = predict(wk, this.test)
+  wknn.pre[, colind] = predict(wk, this.test)
 }
-ran.wknn.pre = ran.wknn.pre[,1:13]
-ran.wknn.err = materr(ran.wknn.pre)%>% t() %>% 
+wknn.pre = wknn.pre[,1:13]
+wknn.err = materr(wknn.pre)%>% t() %>% 
   as.data.frame() 
 @
 
-<<ran.dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
-ran.dtree.pred = test
-ran.dtree.pred[,3:ncol(ran.dtree.pred)] = NA
+<<dtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
+dtree.pred = test
+dtree.pred[,3:ncol(dtree.pred)] = NA
 
 for (i in agg){ 
   colind=which(names(train)==paste0('ROH',i))
   this.train = train[, c(1, colind:ncol(train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
   this.test = test
-  ran.dtree.pred[, colind] = predict(tree.model, this.test)
+  dtree.pred[, colind] = predict(tree.model, this.test)
 }
 
-ran.dtree.err = materr(ran.dtree.pred[,-2]) %>% t() %>% 
+dtree.err = materr(dtree.pred[,-2]) %>% t() %>% 
   as.data.frame() 
 @
 
-<<ran.rtree, echo=FALSE, message=FALSE, warning=FALSE>>= 
+<<rtree, echo=FALSE, eval=FALSE, warning=FALSE>>= 
 set.seed(0)  
-ran.rf.pred = test
-ran.rf.pred[,3:ncol(test)] = NA
+rf.pred = test
+rf.pred[,3:ncol(test)] = NA
 s1 = Sys.time()
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
@@ -304,21 +313,23 @@ for (i in agg){
                  #,tunegrid=expand.grid(.mtry=sqrt(ncol(this.train))))
   print(Sys.time()-s1)
   #print(r.tree)
-  ran.rf.pred[, colind] = predict(r.tree, this.test, type = 'raw')
+  rf.pred[, colind] = predict(r.tree, this.test, type = 'raw')
 }
 #importance(rtt)
 #varImpPlot(rtt)
 #varImp(r.tree)
-write_csv(ran.rf.pred, 'rf05122020.csv')
-ran.rf.pred=read_csv('rf05122020.csv')
-ran.rf.err = materr(ran.rf.pred[,-2])%>% t() %>% 
+@ 
+
+<<rfresults, echo=FALSE>>=
+rf.pred <- read.csv("rfpred_wd_0515.csv")
+rf.err = materr(rf.pred[,-2])%>% t() %>% 
   as.data.frame() 
 @
 
-<<ran.svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
+<<svm, echo=FALSE, message=FALSE, warning=FALSE>>= 
 set.seed(0)
-ran.svm.pred = test   
-ran.svm.pred[,3:ncol(ran.svm.pred)] = NA
+svm.pred = test   
+svm.pred[,3:ncol(svm.pred)] = NA
 totot = rep(0, 90)
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
@@ -326,21 +337,21 @@ for (i in agg){
   svm.model = svm(ROH0~., this.train)
   totot[i]=svm.model$tot.nSV
  # this.test = test
-  ran.svm.pred[, colind] = predict(svm.model, test)
+  svm.pred[, colind] = predict(svm.model, test)
 }
 
-ran.svm.err = materr(ran.svm.pred[,-2]) %>% t() %>% 
+svm.err = materr(svm.pred[,-2]) %>% t() %>% 
   as.data.frame()
-colMeans(ran.svm.err)
+colMeans(svm.err)
 @
 
-<<ran.results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
-e2_SDE_ALL = cbind(apk = ran.apk.wd.err[-1,5], mpk=ran.mpk.wd.err[-1,5],
-              reg = ran.reg.err[-1,5],  nn = ran.nn.err[-1,5],knn = ran.knn.err[-1,5], 
-              wknn = ran.wknn.err[-1,5], dtree = ran.dtree.err[-1,5],  
-              rf = ran.rf.err[-1,5], svm = ran.svm.err[-1,5] ) %>%
+<<results.plot, echo=FALSE, message=FALSE, warning=FALSE>>=
+e2_SDE_ALL = cbind(apk = apk.wd.err[-1,5], mpk=mpk.wd.err[-1,5],
+              reg = reg.err[-1,5],  nn = nn.err[-1,5],knn = knn.err[-1,5], 
+              wknn = wknn.err[-1,5], dtree = dtree.err[-1,5],  
+              rf = rf.err[-1,5], svm = svm.err[-1,5] ) %>%
   as.data.frame() 
-rownames(e2_SDE_ALL)=rownames(ran.apk.wd.err)[-1]
+rownames(e2_SDE_ALL)=rownames(apk.wd.err)[-1]
 e2SDEmelt = melt(as.matrix(e2_SDE_ALL), varnames=c('DBA', 'Model'))
 e2SDEmelt$DBA = factor(e2SDEmelt$DBA, 
               levels = c('ROH1','ROH2','ROH3','ROH4','ROH5','ROH6','ROH7','ROH14',
@@ -370,12 +381,12 @@ kable(e2_SDE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
   kable_styling(latex_options = c("striped", "repeat_header"))
 #write.csv(cbind(MEALL, MAEALL, MPEALL, MAPEALL, SD), "ran_e1_bycutoff.csv")
 
-e2_ME_ALL = cbind(apk = ran.apk.wd.err[-1,1], mpk=ran.mpk.wd.err[-1,1],
-              reg = ran.reg.err[-1,1], nn = ran.nn.err[-1,1], knn = ran.knn.err[-1,1], 
-              wknn = ran.wknn.err[-1,1], dtree = ran.dtree.err[-1,1],  
-              rf = ran.rf.err[-1,1], svm = ran.svm.err[-1,1]) %>%
+e2_ME_ALL = cbind(apk = apk.wd.err[-1,1], mpk=mpk.wd.err[-1,1],
+              reg = reg.err[-1,1], nn = nn.err[-1,1], knn = knn.err[-1,1], 
+              wknn = wknn.err[-1,1], dtree = dtree.err[-1,1],  
+              rf = rf.err[-1,1], svm = svm.err[-1,1]) %>%
   as.data.frame() 
-rownames(e2_ME_ALL)=rownames(ran.apk.wd.err)[-1]
+rownames(e2_ME_ALL)=rownames(apk.wd.err)[-1]
 e2MEmelt = melt(as.matrix(e2_ME_ALL), varnames=c('DBA', 'Model'))
 e2MEmelt$DBA = factor(e2MEmelt$DBA, 
               levels = c('ROH1','ROH2','ROH3','ROH4','ROH5','ROH6','ROH7','ROH14',
@@ -403,12 +414,12 @@ kable(e2_ME_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
   kable_styling(latex_options = c("striped", "repeat_header"))
 
 
-e2_MAE_ALL = cbind(apk = ran.apk.wd.err[-1,2], mpk=ran.mpk.wd.err[-1,2],
-              reg = ran.reg.err[-1,2],  nn = ran.nn.err[-1,2], knn = ran.knn.err[-1,2], 
-              wknn = ran.wknn.err[-1,2], dtree = ran.dtree.err[-1,2],  
-              rf = ran.rf.err[-1,2], svm = ran.svm.err[-1,2]) %>%
+e2_MAE_ALL = cbind(apk = apk.wd.err[-1,2], mpk=mpk.wd.err[-1,2],
+              reg = reg.err[-1,2],  nn = nn.err[-1,2], knn = knn.err[-1,2], 
+              wknn = wknn.err[-1,2], dtree = dtree.err[-1,2],  
+              rf = rf.err[-1,2], svm = svm.err[-1,2]) %>%
   as.data.frame() 
-rownames(e2_MAE_ALL)=rownames(ran.apk.wd.err)[-1]
+rownames(e2_MAE_ALL)=rownames(apk.wd.err)[-1]
 e2MAEmelt = melt(as.matrix(e2_MAE_ALL), varnames=c('DBA', 'Model'))
 e2MAEmelt$DBA = factor(e2MAEmelt$DBA, 
               levels = c('ROH1','ROH2','ROH3','ROH4','ROH5','ROH6','ROH7','ROH14',
@@ -434,7 +445,6 @@ e2_MAE_ALL[13,] = colMeans(e2_MAE_ALL)
 kable(e2_MAE_ALL[13,], 'latex', caption = 'Experiment2: Data Overview',
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header"))
-
 @
 
 
