@@ -60,7 +60,7 @@ materr = function(data){
 
 # Data
 
-## Importe Dataset and Cross-Validation 
+## Import Dataset and Cross-Validation 
 
 ```{r loaddata}
 dt <- read.csv("Arr.csv") %>% 
