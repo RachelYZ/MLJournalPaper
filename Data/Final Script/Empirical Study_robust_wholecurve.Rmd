@@ -1,7 +1,7 @@
 ---
-title: "Robust test"
+title: "Pick-up method + machine learning: a proved efficient approach to forecast hotel demand (Robust test for the whole curve) "
 author: "Rachel Zhang"
-date: "05/29/2020"
+date: "06/18/2020"
 output:
   pdf_document: default
   html_document: default
@@ -60,7 +60,7 @@ materr = function(data){
 
 # Data
 
-## Data Importing and Cross-Validation 
+## Import Dataset and Cross-Validation 
 
 ```{r loaddata}
 dt <- read.csv("Arr.csv") %>% 
@@ -74,14 +74,12 @@ dt = dt[-(1:2),-3]
 dt$Arrival.Date = convert_date(dt$Arrival.Date)
 #---same----# 
 
-wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>% 
+wide = dcast(dt, Arrival.Date ~ Booking.Window, value.var='Quan') %>%
   data.frame() %>%
   arrange(., Arrival.Date)
-
 for (i in (ncol(wide)-1):2){
   wide[i] = wide[i] + wide[i+1] 
 }
-nrow(wide)
 
 agg = c(1, 2, 3, 4, 5, 6, 7, 14, 21, 30, 60, 90)
 wide = wide %>%
@@ -90,19 +88,25 @@ wide = wide %>%
   select(X0, DOW, paste0("X",agg)) 
 colnames(wide) = c('ROH0', 'DOW', paste0('ROH',agg))
 wide$DOW <- ordered(wide$DOW, levels=c("Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+```
 
+```{r plotseries, fig.width=8, fig.height=4}
 ggplot(wide, aes(x=as.Date(unlist(rownames(wide))), y=ROH0)) +
-  geom_line(color='blue') +
+  geom_line(color='dimgray') +
   theme_minimal()+
   xlab("Stay Date") + ylab('Final Arrivals') +
-  theme(plot.caption = element_text(hjust = 0))
+  theme(plot.caption = element_text(hjust = 0), text = element_text(size=10)) 
 ```
+
+This robust test in Section X is conducted under `set.seed(123)`. 
+We randomly selected 80% of the records as the training dataset to tune models, and the rest 20% records are used for model performance test. Here is a peek of the training set: 
 
 ```{r cv}
 set.seed(123)
 tr_ind = sample(nrow(wide), 0.8*nrow(wide))
 train = wide[tr_ind, ]
 test = wide[-tr_ind, ]
+#-----same, data same-----
 kable(train[1:10, ], 'latex', caption = 'Training Set Overview',
         longtable = F, booktabs = T) %>%
   kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
@@ -131,10 +135,10 @@ for (i in 1:(nrow(apk.pre))){
 time.apk = Sys.time() - s1
 apk.err = t(materr(apk.pre[,-2])) %>% data.frame()  
 #same results#
-
 kable(apk, 'latex', caption = 'Additive Pick Ups',
         longtable = F, booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header")) %>%
+  footnote(general = 'The pick-ups are calculated by taking the average of additive increments between current day and a future date by day of week.')
 ```
 
 ### Multiplicative Pick-up
@@ -157,14 +161,16 @@ for (i in 1:(nrow(mpk.pre))){
     test[i,3:ncol(mpk.pre)] / mpk[m, 2:ncol(mpk)]
 }
 time.mpk = Sys.time() - s1
-
 mpk.err = t(materr(mpk.pre[,-2])) %>% data.frame() 
 kable(mpk, 'latex', caption = 'Multiplicative Pick Ups',
         longtable = F, booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header")) %>%
+  footnote(general = 'The pick-ups are calculated by taking the average of ratio increments between current day and a future date by day of week.')
 ```
 
 ### Regression 
+
+The regression model uses the nearest ROH and the DOW of the target day. 
 
 ```{r reg, results="asis"}
 reg.pred = test
@@ -173,10 +179,10 @@ reg = vector(mode='list')
 train$DOW = factor(train$DOW , ordered = FALSE )
 s1 = Sys.time()
 for (i in agg){ 
-  this.predictor = paste0(paste0('ROH',agg[which(agg==i)]), collapse='+')
-  lm.formula = paste('ROH0', paste0('DOW+', this.predictor), sep = '~')
-  reg[[this.predictor]] = lm(lm.formula, data = train)
-  reg.pred[, which(names(reg.pred)==paste0('ROH',i))]=predict(reg[[this.predictor]], test)
+  colind= which(names(train)==paste0('ROH',i))
+  this.train = train[, c(1:2, colind:ncol(train))]
+  reg[[colind-2]] = lm(ROH0~., data=this.train)
+  reg.pred[,colind] = predict(reg[[colind-2]], test)
 }
 time.reg = Sys.time() - s1
 reg.err = t(materr(reg.pred[,-2])) %>% data.frame() 
@@ -185,10 +191,12 @@ reg.err = t(materr(reg.pred[,-2])) %>% data.frame()
 \newpage
 
 ```{r echo=FALSE, results = "asis"}
-texreg(list(reg[[1]], reg[[2]], reg[[3]], reg[[4]], reg[[5]], reg[[6]], reg[[7]], reg[[8]],reg[[9]],reg[[10]],reg[[11]],reg[[12]]))
+library(wordreg)
+wordreg(list(reg[[1]], reg[[2]], reg[[3]], reg[[4]], reg[[5]], reg[[6]], reg[[7]], reg[[8]],reg[[9]],reg[[10]],reg[[11]],reg[[12]]),
+        file = "robust_reg_allcurve.doc")
 ```
 
-
+ 
 ### Neural Network
 
 ```{r nn2}
@@ -201,22 +209,21 @@ nn.train.scaled = data.frame(cbind(dow.tr, nn.train.scaled))
 nn.test.scaled = data.frame(cbind(dow.te, nn.test.scaled))
 nn.pre2 = nn.test.scaled %>% data.frame()
 nn.pre2[, 9:ncol(nn.pre2)] = NA
+nn.model = vector(mode='list')
 #nn.err2 = read.csv('nn.err2.csv')
 ```
+
+When building model, the number of hidden units is set as `3`. The dataset is scaled and DOW is converted to dummy variables. 
 
 ```{r}
 s1=Sys.time()
 for (i in (agg)){
   colind = which(names(as.data.frame(nn.train.scaled))==paste0('ROH',i))
-  this.train = nn.train.scaled[, c(1:8, colind)]
-  nn.model = neuralnet(ROH0~., this.train, linear.output=T, hidden=3,
-                       stepmax = 1e+06)
+  this.train = nn.train.scaled[, c(1:8, colind:ncol(nn.train.scaled))]
+  nn.model[[colind-8]] = neuralnet(ROH0~., this.train, linear.output=T, hidden=3, stepmax = 1e+06)
   this.test = nn.test.scaled[, c(1:8, colind:ncol(nn.test.scaled))] %>% as.data.frame()
-  nn.pre2[, colind] = predict(nn.model, this.test)
+  nn.pre2[, colind] = predict(nn.model[[colind-8]], this.test)
 }
-# summary(nn.model)
-# plot(nn.model)
-# nn.model$weights
 time.nn = Sys.time() - s1
 
 nn.pre2 = nn.pre2[, -(1:7)]
@@ -229,8 +236,21 @@ nn.err2 = materr(nn.pre2.unscaled) %>% t() %>%
   as.data.frame()
 ```
 
+Taking ROH=5 as the example, this plot provides a straightforward visualization of the relevant neural network. 
+
+```{r plotnn, fig.width=20, fig.height=9}
+png(file='nn5plot.png', width=10, height=8, res=300, bg='transparent')
+plot(nn.model[[colind-8]], 
+     radius = 0.1, arrow.length=0.15, information=FALSE, fontsize = 19,
+     col.intercept = "dimgray", dimension=8)
+#print(nn5plot)
+dev.off()
+#ggsave('nn5plot.png',dpi=300, width=10, height=8)
+```
+
+
 ### K-Nearest Neighbor
-```{r knn2}
+```{r knn}
 set.seed(123)
 k.train = cbind(dow.tr, train[,-2])
 k.test = cbind(dow.te, test[,-2])
@@ -240,7 +260,7 @@ opk= rep(NA, length(agg))
 s1=Sys.time()
 for (i in agg){
   colind = which(names(k.train)==paste0('ROH',i))
-  this.train = k.train[, c(1:8, colind)]
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
   train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8)) #for PCA
   k = train(ROH0~., method='knn', tuneLength = 5,
             trControl=train.control, preProcess=c('scale','center','pca'),
@@ -255,8 +275,6 @@ knn.err2 = materr(knn.pre2) %>% t() %>%
 opk
 ```
 
-weighted knn
-
 ```{r wknn2}
 set.seed(123)
 wknn.pre2 = test[,-2]
@@ -266,7 +284,7 @@ s1=Sys.time()
 for (i in agg){
   # 2s per loop
   colind = which(names(k.train)==paste0('ROH',i))
-  this.train = k.train[, c(1:8, colind)]
+  this.train = k.train[, c(1:8, colind:ncol(k.train))]
   train.control = trainControl(method='repeatedcv', number=10, preProcOptions = list(thresh=0.8))
   wk = train.kknn(ROH0~., data = this.train, kmax = 20,
                   kernel =  c("rectangular", "triangular", "epanechnikov", "gaussian", "rank", "optimal"))
@@ -279,7 +297,8 @@ for (i in agg){
 time.wknn = Sys.time() - s1
 wknn.err2 = materr(wknn.pre2)%>% t() %>%
   as.data.frame()
-opk2
+opk
+#same#
 ```
 
 ### Tree
@@ -290,7 +309,7 @@ dtree.pre2[, 3:ncol(dtree.pre2)] = NA
 s1 = Sys.time()
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, 2, colind)]
+  this.train = train[, c(1, 2, colind:ncol(train))]
   tree.model = rpart(ROH0~., data=this.train, method='anova')
   dtree.pre2[, colind] = predict(tree.model, test)
 }
@@ -300,36 +319,38 @@ dtree.err2 = materr(dtree.pre2[,-2]) %>% t() %>%
 #same
 ```
 
-this is the number of variables selected in building each tree. 
+```{r dtreeplot, fig.width=14, fig.height=10}
+library(rpart.plot)
+rpart.plot(tree.model, box.palette = 'Grays', nn=TRUE, extra = 1,
+           cex=2)
+```
+
 ```{r rf2}
 set.seed(123)
 rf.pre2 = test
 rf.pre2[, 3:ncol(test)] = NA
+
 mtry.rf = rep(0, length(agg)+1)
 s1 = Sys.time()
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, 2, colind)]
+  this.train = train[, c(1, 2, colind:ncol(train))]
   train.control=trainControl(method='repeatedcv', number=10)
   r.tree = train(ROH0~., data = this.train, method='rf',
                trControl=train.control, metric = 'RMSE')
   mtry.rf[colind-2] = r.tree$bestTune
   rf.pre2[, colind] = predict(r.tree, test, type = 'raw')
 }
-mtry.rf
 time.rf = Sys.time() - s1
-write_csv(rf.pre2, 'rf.pre2.csv')
-rf.pre2 =  read.csv("rf.pre2.csv")
+#write_csv(rf.pre2, 'rf.pre2.csv')
+#rf.pre2 =  read.csv("rf.pre2.csv")
 rf.err2 = materr(rf.pre2[,-2])%>% t() %>%
   as.data.frame()
 ```
 
-### Support Vector Machine
+### Support Vector Regression
 
-Tuned (`svm` function) radial. 
-
-Notes: 
-when not defining gamma value, it automatically takes gamma = 0.1 and generates the lowest MAE = 5.05. However, according to academics, the gamma value should be selected following gaussian distribution (https://www.youtube.com/watch?v=wuKlhMDxtN0&list=PLC0PzjY99Q_Xc5IK-UE4FX7Loz1auXylY&index=15 or other paper). Then when I took  `gamma=c(0.1,2^(-(0:5))`, the gamma value selected varies, and generates a raletively higher MAE. (still deciding. )
+After some mannual cross validation, we choose the `radial` kernel for this empirical study, then test different `gamma` values for the model. Here shows the selected $\gamma$ values. Usually lower $\gamma$ indicates more linear boundary. 
 
 ```{r svm2}
 set.seed(123)
@@ -340,15 +361,10 @@ gamma = list()
 s1 = Sys.time()
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
-  this.train = train[, c(1, 2, colind)]
-#  svm.model = svm(ROH0~., this.train, kernel='radial')
-  svm.model = tune.svm(ROH0~., data=this.train, kernel="radial")
-       #          ,gamma=c(0.1,2^(-(0:5))))     
-#  gamma=c(0.1,0.2,0.5,1,2))
-  # svm.model = tune.svm(ROH0~., data=this.train, kernel="polynomial", 
-  #                   degree=c(2,3,5), coef0=c(0.1,0.5,1,2))
-  gamma[[colind-2]] = svm.model$best.parameters[1,1]
-#  svm.tune = tune(svm, ROH0~., data = this.train, 
+  this.train = train[, c(1, 2, colind:ncol(train))]
+  svm.model = tune.svm(ROH0~., data=this.train, kernel="radial",
+                 gamma=c(0.1,2^(-(0:5))))    
+  gamma[[colind-2]] = svm.model$best.parameters[1,1]#  svm.tune = tune(svm, ROH0~., data = this.train, 
  #                 kernel = 'polynomial', ranges = list(degree = 1:5, coef0 = c(0.5,1,2)))
   svm.pre2[, colind] = predict(svm.model$best.model, test)
 }
@@ -382,6 +398,7 @@ ME_ALL = cbind(apk = apk.err[-1,1], mpk=mpk.err[-1,1],
               rf = rf.err2[-1,1], svm = svm.err2[-1,1]) %>%
   as.data.frame()
 rownames(ME_ALL) = c(paste0('DBA',agg))
+
 # MEmelt = melt(as.matrix(ME_ALL), varnames=c('DBA', 'Model'))
 # MEmelt$DBA = factor(MEmelt$DBA,
 #                   levels = c(paste0('DBA', agg)))
@@ -508,10 +525,8 @@ rownames(MAPE_ALL) = c(paste0('DBA',agg))
 MAPE_ALL[13,] = colMeans(MAPE_ALL)
 kable(MAPE_ALL, row.names = NA, 'latex', caption = 'MAPE',
       booktabs = T) %>%
-  kable_styling(latex_options = c("striped", "repeat_header", 'hold_position'))
+  kable_styling(latex_options = c("striped", "repeat_header",  'hold_position'))
 ```
-
-\newpage
 
 ```{r results_allavg}
 time = c(time.apk, time.mpk, time.reg, time.nn, time.knn, time.wknn, 
@@ -519,18 +534,19 @@ time = c(time.apk, time.mpk, time.reg, time.nn, time.knn, time.wknn,
 ALL = rbind(ME = ME_ALL[13,], `MAE` = MAE_ALL[13,], `SDE` = SDE_ALL[13,], 
             `MPE` = MPE_ALL[13,],
             `MAPE`=MAPE_ALL[13,], 
-            `Time` = time) %>% t() 
+            `Time` = time) %>% t()
 model_list = c('Additive Pickup','Multiplicative Pickup', 'Regression',
                'Neural Network', 'K-Nearest Neighbor', 'Weighted K-Nearest Neighbor', 
                'Decision Tree', 'Random Forest', 'Support Vector Machine')
 rownames(ALL) = model_list
 kable(ALL, 'latex', caption = 'Model Performances',
-      col.names = c('ME[note]', 'MAE[note]', 'SDE[note]', 'MPE[note]', 'MAPE[note]', 'Time[note]'),
       booktabs = T) %>%
   kable_styling(latex_options = c("striped", "repeat_header", 'hold_position')) %>%
   footnote(number = c('Mean Error', 'Mean Absolute Error', 'Standard Deviation Error',
                       'Mean Percentage Error', 'Mean Absolute Percentage Error', 
-                      'time is calculated in seconds'))
+                      'Time is calculated in seconds'))
+#ALL = read.csv("~/Documents/Research/MLJournalPaper/Data/Final Script/results_allcurve.csv")
+write.csv(ALL, file='robust_results_allcurve.csv')
 ```
 
 
