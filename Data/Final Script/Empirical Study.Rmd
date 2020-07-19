@@ -357,41 +357,41 @@ rf.err2 = materr(rf.pre2[,-2])%>% t() %>%
 
 After some mannual cross validation, we choose the `radial` kernel for this empirical study, then test different `gamma` values for the model. Here shows the selected $\gamma$ values. Usually lower $\gamma$ indicates more linear boundary. 
 
-```{r svm2}
+```{r svr2}
 set.seed(0)
-svm.pre2 = test
-svm.pre2[, 3:ncol(svm.pre2)] = NA
+svr.pre2 = test
+svr.pre2[, 3:ncol(svr.pre2)] = NA
 gamma = list()
 
 s1 = Sys.time()
 for (i in agg){
   colind=which(names(train)==paste0('ROH',i))
   this.train = train[, c(1, 2, colind)]
-  svm.model = tune.svm(ROH0~., data=this.train, kernel="radial",
+  svr.model = tune.svm(ROH0~., data=this.train, kernel="radial",
                  gamma=c(0.1,2^(-(0:5))))    
-  gamma[[colind-2]] = svm.model$best.parameters[1,1]#  svm.tune = tune(svm, ROH0~., data = this.train, 
+  gamma[[colind-2]] = svr.model$best.parameters[1,1]#  svr.tune = tune(svr, ROH0~., data = this.train, 
  #                 kernel = 'polynomial', ranges = list(degree = 1:5, coef0 = c(0.5,1,2)))
-  svm.pre2[, colind] = predict(svm.model$best.model, test)
+  svr.pre2[, colind] = predict(svr.model$best.model, test)
 }
-svm.err2 = materr(svm.pre2[,-2]) %>% t() %>%
+svr.err2 = materr(svr.pre2[,-2]) %>% t() %>%
   as.data.frame()
-time.svm = Sys.time() - s1
+time.svr = Sys.time() - s1
 gamma
 # #select among linear, 
-# svm.linear = tune.svm(ROH0~., data=this.train, kernel="linear", cost=c(0.001, 0.01, 0.1, 1,5,10))
-# svm.linear$best.performance #5.38 - 9.66 - 18.5 - 143 
+# svr.linear = tune.svm(ROH0~., data=this.train, kernel="linear", cost=c(0.001, 0.01, 0.1, 1,5,10))
+# svr.linear$best.performance #5.38 - 9.66 - 18.5 - 143 
 # 
-# svm.poly = tune.svm(ROH0~., data=this.train, kernel="polynomial", 
+# svr.poly = tune.svm(ROH0~., data=this.train, kernel="polynomial", 
 #                     degree=c(2,3,4,5), coef0=c(0.1,0.5,1,2,3,4))
-# svm.poly$best.performance  #5.28 - 9.55 - 17.3 - 149
+# svr.poly$best.performance  #5.28 - 9.55 - 17.3 - 149
 # 
-# svm.radial = tune.svm(ROH0~., data=this.train, kernel="radial",
+# svr.radial = tune.svm(ROH0~., data=this.train, kernel="radial",
 # gamma=c(0.1,0.5,1,2,3,4))
-# svm.radial$best.performance  #19.2 - 22.4 - 150
+# svr.radial$best.performance  #19.2 - 22.4 - 150
 # 
-# svm.sigmoid = tune.svm(ROH0~., data=this.train, kernel="sigmoid",
+# svr.sigmoid = tune.svm(ROH0~., data=this.train, kernel="sigmoid",
 # gamma=c(0.1,0.5,1,2,3,4), coef0=c(0.1,0.5,1,2,3,4))
-# svm.sigmoid$best.performance  #very bad - 23.9 - 158
+# svr.sigmoid$best.performance  #very bad - 23.9 - 158
 ```
 
 
@@ -400,7 +400,7 @@ gamma
 ME_ALL = cbind(apk = apk.err[-1,1], mpk=mpk.err[-1,1],
               reg = reg.err[-1,1], nn = nn.err2[-1,1], knn = knn.err2[-1,1],
               wknn = wknn.err2[-1,1], dtree = dtree.err2[-1,1],
-              rf = rf.err2[-1,1], svm = svm.err2[-1,1]) %>%
+              rf = rf.err2[-1,1], svr = svr.err2[-1,1]) %>%
   as.data.frame()
 rownames(ME_ALL) = c(paste0('DBA',agg))
 
@@ -408,7 +408,7 @@ rownames(ME_ALL) = c(paste0('DBA',agg))
 # MEmelt$DBA = factor(MEmelt$DBA,
 #                   levels = c(paste0('DBA', agg)))
 # MEmelt$Model = factor(MEmelt$Model,
-#                       levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+#                       levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
 #
 # ggplot(MEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
 #   geom_line(aes(color=Model), size=1)+
@@ -428,22 +428,22 @@ kable(ME_ALL, 'latex', caption = 'Mean Errors',
 MAE_ALL = cbind(apk = apk.err[-1,2], mpk=mpk.err[-1,2],
               reg = reg.err[-1,2],  nn = nn.err2[-1,2], knn = knn.err2[-1,2],
               wknn = wknn.err2[-1,2], dtree = dtree.err2[-1,2],
-              rf = rf.err2[-1,2], svm = svm.err2[-1,2]) %>%
+              rf = rf.err2[-1,2], svr = svr.err2[-1,2]) %>%
   as.data.frame()
 rownames(MAE_ALL) = c(paste0('DBA',agg))
 #
-# MAEmelt = melt(as.matrix(MAE_ALL), varnames=c('DBA', 'Model'))
-# MAEmelt$DBA = factor(MAEmelt$DBA,
-#               levels = c(paste0('DBA', agg)))
-# MAEmelt$Model = factor(MAEmelt$Model,
-#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
-# ggplot(MAEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
-#   geom_line(aes(color=Model), size=1)+
-#   geom_point(aes(color=Model), size=1)+
-#   scale_color_brewer(palette="Paired")+
-#   xlab('') + ylab('Mean Absolute Errors') +
-#   theme_minimal()+ ylim(0,15)+
-#   theme(axis.text.x = element_text(angle=45, vjust=0.5))
+MAEmelt = melt(as.matrix(MAE_ALL[1:7,]), varnames=c('DBA', 'Model'))
+MAEmelt$DBA = factor(MAEmelt$DBA,
+              levels = c(paste0('DBA', agg)))
+MAEmelt$Model = factor(MAEmelt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+ggplot(MAEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_brewer(palette="Paired")+
+  xlab('') + ylab('Mean Absolute Errors') +
+  theme_minimal()+#ylim(0,15)+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
 
 MAE_ALL[13,] = colMeans(MAE_ALL)
 kable(MAE_ALL, 'latex', caption = 'Mean Absolute Errors',
@@ -451,11 +451,14 @@ kable(MAE_ALL, 'latex', caption = 'Mean Absolute Errors',
   kable_styling(latex_options = c("striped", "repeat_header", 'hold_position'))
 ```
 
+
+
+
 ```{r results_SDE2}
 SDE_ALL = cbind(apk = apk.err[-1,5], mpk=mpk.err[-1,5],
               reg = reg.err[-1,5],  nn = nn.err2[-1,5], knn = knn.err2[-1,5],
               wknn = wknn.err2[-1,5], dtree = dtree.err2[-1,5],
-              rf = rf.err2[-1,5], svm = svm.err2[-1,5] ) %>%
+              rf = rf.err2[-1,5], svr = svr.err2[-1,5] ) %>%
   as.data.frame()
 rownames(SDE_ALL) = c(paste0('DBA',agg))
 #
@@ -463,7 +466,7 @@ rownames(SDE_ALL) = c(paste0('DBA',agg))
 # SDEmelt$DBA = factor(SDEmelt$DBA,
 #               levels = c(paste0('DBA', agg)))
 # SDEmelt$Model = factor(SDEmelt$Model,
-#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
 # ggplot(SDEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
 #   geom_line(aes(color=Model), size=1)+
 #   geom_point(aes(color=Model), size=1)+
@@ -483,7 +486,7 @@ kable(SDE_ALL, 'latex', caption = 'Standard Deviation Errors',
 MPE_ALL = cbind(apk = apk.err[-1,3], mpk=mpk.err[-1,3],
               reg = reg.err[-1,3],  nn = nn.err2[-1,3], knn = knn.err2[-1,3],
               wknn = wknn.err2[-1,3], dtree = dtree.err2[-1,3],
-              rf = rf.err2[-1,3], svm = svm.err2[-1,3]) %>%
+              rf = rf.err2[-1,3], svr = svr.err2[-1,3]) %>%
   as.data.frame()
 rownames(MPE_ALL) = c(paste0('DBA',agg))
 #
@@ -491,7 +494,7 @@ rownames(MPE_ALL) = c(paste0('DBA',agg))
 # MPEmelt$DBA = factor(MPEmelt$DBA,
 #               levels = c(paste0('DBA', agg)))
 # MPEmelt$Model = factor(MPEmelt$Model,
-#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
 # ggplot(MPEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
 #   geom_line(aes(color=Model), size=1)+
 #   geom_point(aes(color=Model), size=1)+
@@ -510,7 +513,7 @@ kable(MPE_ALL, 'latex', caption = 'Mean Percentage Errors',
 MAPE_ALL = cbind(apk = apk.err[-1,4], mpk=mpk.err[-1,4],
               reg = reg.err[-1,4],  nn = nn.err2[-1,4], knn = knn.err2[-1,4],
               wknn = wknn.err2[-1,4], dtree = dtree.err2[-1,4],
-              rf = rf.err2[-1,4], svm = svm.err2[-1,4]) %>%
+              rf = rf.err2[-1,4], svr = svr.err2[-1,4]) %>%
   as.data.frame()
 rownames(MAPE_ALL) = c(paste0('DBA',agg))
 
@@ -518,7 +521,7 @@ rownames(MAPE_ALL) = c(paste0('DBA',agg))
 # MAPEmelt$DBA = factor(MAPEmelt$DBA,
 #               levels = c(paste0('DBA', agg)))
 # MAPEmelt$Model = factor(MAPEmelt$Model,
-#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
 # ggplot(MAPEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
 #   geom_line(aes(color=Model), size=1)+
 #   geom_point(aes(color=Model), size=1)+
@@ -535,7 +538,7 @@ kable(MAPE_ALL, row.names = NA, 'latex', caption = 'MAPE',
 
 ```{r results_allavg}
 time = c(time.apk, time.mpk, time.reg, time.nn, time.knn, time.wknn, 
-         time.dtree, time.rf, time.svm)
+         time.dtree, time.rf, time.svr)
 ALL = rbind(ME = ME_ALL[13,], `MAE` = MAE_ALL[13,], `SDE` = SDE_ALL[13,], 
             `MPE` = MPE_ALL[13,],
             `MAPE`=MAPE_ALL[13,], 

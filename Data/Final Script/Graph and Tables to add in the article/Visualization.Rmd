@@ -1,0 +1,171 @@
+---
+title: "Visualization"
+author: "Rachel Zhang (yz2334)"
+date: "7/17/2020"
+output: pdf_document
+---
+
+# Newest ROH
+
+```{r setup, include=FALSE}
+library(gridExtra)
+library(grid)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load different session for various visualization. 
+
+```{r loadsession}
+#load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/newestROH.RData")
+load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/Allcurve.RData")
+```
+
+Only plot Regression, SVR, additive pickup, and Random Forest. 
+
+```{r colorpalette,include=FALSE}
+j1 = c('#e8505b', '#f9d56e', '#a6dcef', '#14b1ab')
+```
+
+```{r multiplotfunc, include=FALSE}
+
+grid_arrange_shared_legend <- function(..., nrow = 1, ncol = length(list(...)), position = c("bottom", "right")) {
+
+  plots <- list(...)
+  position <- match.arg(position)
+  g <- ggplotGrob(plots[[1]] + theme(legend.position = position))$grobs
+  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
+  lheight <- sum(legend$height)
+  lwidth <- sum(legend$width)
+  gl <- lapply(plots, function(x) x + theme(legend.position = "none"))
+  gl <- c(gl, nrow = nrow, ncol = ncol)
+
+  combined <- switch(position,
+                     "bottom" = arrangeGrob(do.call(arrangeGrob, gl),
+                                            legend,
+                                            ncol = 1,
+                                            heights = unit.c(unit(1, "npc") - lheight, lheight)),
+                     "right" = arrangeGrob(do.call(arrangeGrob, gl),
+                                           legend,
+                                           ncol = 2,
+                                           widths = unit.c(unit(1, "npc") - lwidth, lwidth)))
+  grid.newpage()
+  grid.draw(combined)
+}
+```
+
+```{r ME4}
+ME4 = ME_ALL[-13, c(1,3,8,9)]
+rownames(ME4) = agg
+ME4melt = melt(as.matrix(ME4), varnames=c('DBA', 'Model'))
+ME4melt$DBA = factor(ME4melt$DBA, levels = agg)
+      #        levels = c(paste0('DBA', agg)))
+ME4melt$Model = factor(ME4melt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+```
+
+```{r}
+plotME1 = ggplot(ME4melt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_manual(values=j1)+
+#  scale_color_brewer(palette="Set2")+
+  xlab('DBA') + ylab('Mean Errors') +
+  theme_minimal() +
+  theme(legend.position = 'none') #+ylim(0,15)+
+#  theme(axis.text.x = element_text(vjust=1)) #angle=45, 
+```
+
+```{r MAE4}
+MAE4 = MAE_ALL[-13, c(1,3,8,9)]
+rownames(MAE4) = agg
+MAE4melt = melt(as.matrix(MAE4), varnames=c('DBA', 'Model'))
+MAE4melt$DBA = factor(MAE4melt$DBA, levels = agg)
+      #        levels = c(paste0('DBA', agg)))
+MAE4melt$Model = factor(MAE4melt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+```
+
+```{r MAE4plot, fig.width=4, fig.height=6}
+plotMAE1 = ggplot(MAE4melt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_manual(values=j1)+
+#  scale_color_brewer(palette="Set2")+
+  xlab('DBA') + ylab('Mean Absolute Errors') +
+  theme_minimal() +
+  theme(legend.position = 'none')
+  #+ylim(0,15)+
+#  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+```
+
+```{r MPE4}
+MPE4 = MPE_ALL[-13, c(1,3,8,9)]
+rownames(MPE4) = agg
+MPE4melt = melt(as.matrix(MPE4), varnames=c('DBA', 'Model'))
+MPE4melt$DBA = factor(MPE4melt$DBA, levels = agg)
+      #        levels = c(paste0('DBA', agg)))
+MPE4melt$Model = factor(MPE4melt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+```
+
+```{r MPE4plot, fig.width=4, fig.height=6}
+plotMPE1 = ggplot(MPE4melt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_manual(values=j1)+
+#  scale_color_brewer(palette="Set2")+
+  xlab('DBA') + ylab('Mean Percentage Errors') +
+    theme_minimal() +
+  theme(legend.position = 'none') #+ylim(0,15)+
+#  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+```
+
+```{r MAPE4}
+MAPE4 = MAPE_ALL[-13, c(1,3,8,9)]
+rownames(MAPE4) = agg
+MAPE4melt = melt(as.matrix(MAPE4), varnames=c('DBA', 'Model'))
+MAPE4melt$DBA = factor(MAPE4melt$DBA, levels = agg)
+      #        levels = c(paste0('DBA', agg)))
+MAPE4melt$Model = factor(MAPE4melt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+```
+
+```{r MAPE4plot, fig.width=4, fig.height=6}
+plotMAPE1 = ggplot(MAPE4melt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_manual(values=j1)+
+#  scale_color_brewer(palette="Set2")+
+  xlab('DBA') + ylab('Mean Absolute Percentage Errors') +
+    theme_minimal() +
+  theme(legend.position = 'none') #+ylim(0,15)+
+#  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+```
+
+```{r SDE4}
+SDE4 = SDE_ALL[-13, c(1,3,8,9)]
+rownames(SDE4) = agg
+SDE4melt = melt(as.matrix(SDE4), varnames=c('DBA', 'Model'))
+SDE4melt$DBA = factor(SDE4melt$DBA, levels = agg)
+      #        levels = c(paste0('DBA', agg)))
+SDE4melt$Model = factor(SDE4melt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svr'))
+```
+
+```{r SDE4plot, fig.width=4, fig.height=6}
+plotSDE1 = ggplot(SDE4melt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_manual(values=j1)+
+#  scale_color_brewer(palette="Set2")+
+  xlab('DBA') + ylab('Standard Deviation Errors') +
+  theme_minimal() #+ylim(0,15)+
+#  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+```
+
+```{r multiplot_E1, fig.width=15, fig.height=6}
+grid_arrange_shared_legend(plotME1, plotMPE1, plotMAE1, plotMAPE1, plotSDE1, nrow=1)
+```
