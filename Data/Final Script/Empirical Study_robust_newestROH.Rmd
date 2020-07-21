@@ -431,20 +431,20 @@ MAE_ALL = cbind(apk = apk.err[-1,2], mpk=mpk.err[-1,2],
               rf = rf.err2[-1,2], svm = svm.err2[-1,2]) %>%
   as.data.frame()
 rownames(MAE_ALL) = c(paste0('DBA',agg))
-#
-# MAEmelt = melt(as.matrix(MAE_ALL), varnames=c('DBA', 'Model'))
-# MAEmelt$DBA = factor(MAEmelt$DBA,
-#               levels = c(paste0('DBA', agg)))
-# MAEmelt$Model = factor(MAEmelt$Model,
-#               levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
-# ggplot(MAEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
-#   geom_line(aes(color=Model), size=1)+
-#   geom_point(aes(color=Model), size=1)+
-#   scale_color_brewer(palette="Paired")+
-#   xlab('') + ylab('Mean Absolute Errors') +
-#   theme_minimal()+ ylim(0,15)+
-#   theme(axis.text.x = element_text(angle=45, vjust=0.5))
-
+#----------
+MAEmelt = melt(as.matrix(MAE_ALL), varnames=c('DBA', 'Model'))
+MAEmelt$DBA = factor(MAEmelt$DBA,
+              levels = c(paste0('DBA', agg)))
+MAEmelt$Model = factor(MAEmelt$Model,
+              levels=c('apk','mpk','reg','nn','knn','wknn', 'dtree', 'rf','svm'))
+ggplot(MAEmelt, aes(x=DBA, y=value, group=Model, color=Model)) +
+  geom_line(aes(color=Model), size=1)+
+  geom_point(aes(color=Model), size=1)+
+  scale_color_brewer(palette="Paired")+
+  xlab('') + ylab('Mean Absolute Errors') +
+  theme_minimal()+ ylim(0,15)+
+  theme(axis.text.x = element_text(angle=45, vjust=0.5))
+##-------------
 MAE_ALL[13,] = colMeans(MAE_ALL)
 kable(MAE_ALL, 'latex', caption = 'Mean Absolute Errors',
       booktabs = T) %>%
