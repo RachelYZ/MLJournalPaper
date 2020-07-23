@@ -3,6 +3,8 @@ title: "Visualization"
 author: "Rachel Zhang (yz2334)"
 date: "7/17/2020"
 output: pdf_document
+classoption: 
+  - landscape
 ---
 
 # Newest ROH
@@ -12,8 +14,11 @@ library(gridExtra)
 library(grid)
 library(dplyr)
 library(ggplot2)
+library(texreg)
 library(reshape2)
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, 
+                      out.height = "\\textheight",  
+                      out.width = "\\textwidth")
 ```
 
 Load different session for various visualization. 
@@ -22,6 +27,12 @@ Load different session for various visualization.
 #load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/newestROH.RData")
 load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/Allcurve.RData")
 ```
+
+
+```{r regression results, results = "asis"}
+texreg(list(reg[[1]], reg[[2]], reg[[3]], reg[[4]], reg[[5]], reg[[6]], reg[[7]], reg[[8]],reg[[9]],reg[[10]],reg[[11]],reg[[12]]))
+```
+
 
 Only plot Regression, SVR, additive pickup, and Random Forest. 
 
