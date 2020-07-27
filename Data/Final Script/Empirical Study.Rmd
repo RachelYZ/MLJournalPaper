@@ -113,7 +113,7 @@ kable(train[1:10, ], 'latex', caption = 'Training Set Overview',
   kable_styling(latex_options = c("striped", "hold_position", "scale_down" ,"repeat_header"))
 ```
 
-## Modeling
+# Modeling
 ### Additive Pick-up
 ```{r apk}
 #calculating additive pick up
@@ -333,7 +333,6 @@ rpart.plot(tree.model, box.palette = 'Grays', nn=TRUE, extra = 1,
 set.seed(0)
 rf.pre2 = test
 rf.pre2[, 3:ncol(test)] = NA
-
 
 mtry.rf = rep(0, length(agg)+1)
 s1 = Sys.time()

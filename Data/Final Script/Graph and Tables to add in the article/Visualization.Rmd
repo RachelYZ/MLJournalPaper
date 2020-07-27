@@ -24,13 +24,21 @@ knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
 Load different session for various visualization. 
 
 ```{r loadsession}
-#load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/newestROH.RData")
-load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/Allcurve.RData")
+load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/newestROH.RData")
+#load("~/Documents/Research/MLJournalPaper/Data/Final Script/sessions/Allcurve.RData")
+```
+
+
+```{r pickups}
+write_csv(apk, 'apk.csv')
 ```
 
 
 ```{r regression results, results = "asis"}
-texreg(list(reg[[1]], reg[[2]], reg[[3]], reg[[4]], reg[[5]], reg[[6]], reg[[7]], reg[[8]],reg[[9]],reg[[10]],reg[[11]],reg[[12]]))
+reg_results = list(reg[[1]], reg[[2]], reg[[3]], reg[[4]], reg[[5]], reg[[6]], reg[[7]], reg[[8]],reg[[9]],reg[[10]],reg[[11]],reg[[12]])
+
+texreg::htmlreg(reg_results,file='regression_newestROH.doc')
+texreg(reg_results)
 ```
 
 
